@@ -103,6 +103,34 @@ archives:
   - builds:
       - netbird
       - netbird-static
+nfpms:
+  - maintainer: Netbird <dev@netbird.io>
+    description: Netbird client.
+    homepage: https://netbird.io/
+    id: netbird-deb
+    bindir: /usr/bin
+    builds:
+      - netbird
+    formats:
+      - deb
+
+    scripts:
+      postinstall: "release_files/post_install.sh"
+      preremove: "release_files/pre_remove.sh"
+
+  - maintainer: Netbird <dev@netbird.io>
+    description: Netbird client.
+    homepage: https://netbird.io/
+    id: netbird-rpm
+    bindir: /usr/bin
+    builds:
+      - netbird
+    formats:
+      - rpm
+
+    scripts:
+      postinstall: "release_files/post_install.sh"
+      preremove: "release_files/pre_remove.sh"
 
 checksum:
   extra_files:
