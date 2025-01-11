@@ -13,7 +13,11 @@ concurrency:
 jobs:
   build-cache:
     runs-on: ubuntu-22.04
-    steps:        
+    steps:   
+      - name: Dump GitHub context
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+        run: echo "$GITHUB_CONTEXT"    
       - name: Checkout code
         uses: actions/checkout@v4
 
