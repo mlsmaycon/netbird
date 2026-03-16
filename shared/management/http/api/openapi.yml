@@ -4255,15 +4255,6 @@ components:
           description: Maximum number of allowed failing policies. Use 0 to require all policies to pass
           minimum: 0
           example: 0
-        failing_critical_policies_count_max:
-          type: integer
-          description: Maximum number of allowed failing critical policies (FleetDM Premium). Use 0 to require all critical policies to pass
-          minimum: 0
-          example: 0
-        os_version_min:
-          type: string
-          description: Minimum OS version required (e.g. "14.0", "22H2")
-          example: "14.0"
         vulnerable_software_count_max:
           type: integer
           description: Maximum number of allowed vulnerable software on the host

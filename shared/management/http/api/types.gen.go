@@ -1979,14 +1979,8 @@ type FleetDMMatchAttributes struct {
 	// DiskEncryptionEnabled Whether disk encryption (FileVault/BitLocker) must be enabled on the host
 	DiskEncryptionEnabled *bool `json:"disk_encryption_enabled,omitempty"`
 
-	// FailingCriticalPoliciesCountMax Maximum number of allowed failing critical policies (FleetDM Premium). Use 0 to require all critical policies to pass
-	FailingCriticalPoliciesCountMax *int `json:"failing_critical_policies_count_max,omitempty"`
-
 	// FailingPoliciesCountMax Maximum number of allowed failing policies. Use 0 to require all policies to pass
 	FailingPoliciesCountMax *int `json:"failing_policies_count_max,omitempty"`
-
-	// OsVersionMin Minimum OS version required (e.g. "14.0", "22H2")
-	OsVersionMin *string `json:"os_version_min,omitempty"`
 
 	// RequiredPolicies List of FleetDM policy IDs that must be passing on the host. If any of these policies is failing, the host is non-compliant
 	RequiredPolicies *[]int `json:"required_policies,omitempty"`
