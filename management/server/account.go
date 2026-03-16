@@ -1760,20 +1760,10 @@ func (am *DefaultAccountManager) SyncAndMarkPeer(ctx context.Context, accountID 
 	return peer, netMap, postureChecks, dnsfwdPort, nil
 }
 
+// OnPeerDisconnected marks a peer as disconnected using streamStartTime for stale detection.
+// The actual staleness check happens inside MarkPeerConnected's transaction to avoid TOCTOU races.
 func (am *DefaultAccountManager) OnPeerDisconnected(ctx context.Context, accountID string, peerPubKey string, streamStartTime time.Time) error {
-	peer, err := am.Store.GetPeerByPeerPubKey(ctx, store.LockingStrengthNone, peerPubKey)
-	if err != nil {
-		log.WithContext(ctx).Warnf("failed to get peer %s for disconnect check: %v", peerPubKey, err)
-		return nil
-	}
-
-	if peer.Status.LastSeen.After(streamStartTime) {
-		log.WithContext(ctx).Tracef("peer %s has newer activity (lastSeen=%s > streamStart=%s), skipping disconnect",
-			peerPubKey, peer.Status.LastSeen.Format(time.RFC3339), streamStartTime.Format(time.RFC3339))
-		return nil
-	}
-
-	err = am.MarkPeerConnected(ctx, peerPubKey, false, nil, accountID, time.Now().UTC())
+	err := am.MarkPeerConnected(ctx, peerPubKey, false, nil, accountID, streamStartTime)
 	if err != nil {
 		log.WithContext(ctx).Warnf("failed marking peer as disconnected %s %v", peerPubKey, err)
 	}

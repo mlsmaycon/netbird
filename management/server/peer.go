@@ -117,9 +117,9 @@ func (am *DefaultAccountManager) MarkPeerConnected(ctx context.Context, peerPubK
 			return err
 		}
 
-		if connected && !syncTime.After(peer.Status.LastSeen) {
-			log.WithContext(ctx).Tracef("peer %s has newer activity (lastSeen=%s >= syncTime=%s), skipping connect",
-				peer.ID, peer.Status.LastSeen.Format(time.RFC3339), syncTime.Format(time.RFC3339))
+		if !syncTime.After(peer.Status.LastSeen) {
+			log.WithContext(ctx).Tracef("peer %s has newer activity (lastSeen=%s >= syncTime=%s), skipping status update to connected=%t",
+				peer.ID, peer.Status.LastSeen.Format(time.RFC3339), syncTime.Format(time.RFC3339), connected)
 			skipped = true
 			return nil
 		}

@@ -2030,6 +2030,29 @@ func TestDefaultAccountManager_OnPeerDisconnected_LastSeenCheck(t *testing.T) {
 			"peer should remain connected because LastSeen > streamStartTime (zombie stream protection)")
 	})
 
+	t.Run("skip stale disconnect when peer reconnected to another server", func(t *testing.T) {
+		// Simulate: peer connects to Server A at T1, then Server B sends stale disconnect from T0
+		serverAConnectTime := time.Now().UTC()
+		err = manager.MarkPeerConnected(context.Background(), peerPubKey, true, nil, accountID, serverAConnectTime)
+		require.NoError(t, err, "server A should connect peer")
+
+		peer, err := manager.Store.GetPeerByPeerPubKey(context.Background(), store.LockingStrengthNone, peerPubKey)
+		require.NoError(t, err)
+		require.True(t, peer.Status.Connected, "peer should be connected via server A")
+
+		// Server B's stream started before the peer reconnected to Server A
+		serverBStreamStart := serverAConnectTime.Add(-5 * time.Second)
+		err = manager.OnPeerDisconnected(context.Background(), accountID, peerPubKey, serverBStreamStart)
+		require.NoError(t, err)
+
+		peer, err = manager.Store.GetPeerByPeerPubKey(context.Background(), store.LockingStrengthNone, peerPubKey)
+		require.NoError(t, err)
+		require.True(t, peer.Status.Connected,
+			"peer should remain connected: server B's stale disconnect must not override server A's newer connect")
+		require.Equal(t, serverAConnectTime.Unix(), peer.Status.LastSeen.Unix(),
+			"LastSeen should remain as server A's connect time")
+	})
+
 	t.Run("skip stale connect when peer already has newer LastSeen (blocked goroutine protection)", func(t *testing.T) {
 		node2SyncTime := time.Now().UTC()
 		err = manager.MarkPeerConnected(context.Background(), peerPubKey, true, nil, accountID, node2SyncTime)
