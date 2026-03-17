@@ -128,7 +128,7 @@ func TestResolveConnector_NoConfigFallback(t *testing.T) {
 
 	cfg := &nbconfig.Config{} // no IdpManagerConfig
 	conn, err := resolveConnector("", cfg)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrNoIdpManagerConfig)
 	assert.Nil(t, conn) // no connector found
 }
 
@@ -254,7 +254,7 @@ func TestBuildConnectorFromConfig_MissingClientConfig(t *testing.T) {
 	}
 
 	conn, err := buildConnectorFromConfig(cfg)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrNoIdpManagerConfig)
 	assert.Nil(t, conn) // returns nil, nil when no ClientConfig
 }
 
@@ -262,7 +262,7 @@ func TestBuildConnectorFromConfig_MissingIdpManagerConfig(t *testing.T) {
 	cfg := &nbconfig.Config{}
 
 	conn, err := buildConnectorFromConfig(cfg)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrNoIdpManagerConfig)
 	assert.Nil(t, conn)
 }
 

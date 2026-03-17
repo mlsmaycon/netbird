@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 
@@ -20,30 +21,25 @@ import (
 // Server is the dependency interface that migration functions use to access
 // the main data store and the activity event store.
 type Server interface {
-	Store() MigrationStore
-	EventStore() MigrationEventStore // may return nil
+	Store() Store
+	EventStore() EventStore // may return nil
 }
 
 const idpSeedInfoKey = "IDP_SEED_INFO"
 const dryRunEnvKey = "NB_IDP_MIGRATION_DRY_RUN"
 
-// IsSeedInfoPresent reports whether the IDP_SEED_INFO environment variable is
-// set to a non-empty value, indicating that connector seed information is available.
-func IsSeedInfoPresent() bool {
-	val, ok := os.LookupEnv(idpSeedInfoKey)
-	return ok && val != ""
-}
-
 func isDryRun() bool {
 	return os.Getenv(dryRunEnvKey) == "true"
 }
+
+var ErrNoSeedInfo = errors.New("no seed info found in environment")
 
 // SeedConnectorFromEnv reads the IDP_SEED_INFO env var, base64-decodes it,
 // and JSON-unmarshals it into a dex.Connector. Returns nil if not set.
 func SeedConnectorFromEnv() (*dex.Connector, error) {
 	val, ok := os.LookupEnv(idpSeedInfoKey)
 	if !ok || val == "" {
-		return nil, nil
+		return nil, ErrNoSeedInfo
 	}
 
 	decoded, err := base64.StdEncoding.DecodeString(val)
@@ -118,7 +114,7 @@ func MigrateUsersToStaticConnectors(s Server, conn *dex.Connector) error {
 
 // reconcileActivityStore updates activity store references for users already migrated
 // in the main DB whose activity entries may still use old IDs from a previous partial failure.
-func reconcileActivityStore(ctx context.Context, eventStore MigrationEventStore, users []*types.User) error {
+func reconcileActivityStore(ctx context.Context, eventStore EventStore, users []*types.User) error {
 	for _, user := range users {
 		originalID, _, err := dex.DecodeDexUserID(user.Id)
 		if err != nil {

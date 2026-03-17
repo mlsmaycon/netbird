@@ -22,7 +22,6 @@ import (
 	"github.com/netbirdio/netbird/management/server/geolocation"
 	"github.com/netbirdio/netbird/management/server/groups"
 	"github.com/netbirdio/netbird/management/server/idp"
-	"github.com/netbirdio/netbird/management/server/idp/migration"
 	"github.com/netbirdio/netbird/management/server/networks"
 	"github.com/netbirdio/netbird/management/server/networks/resources"
 	"github.com/netbirdio/netbird/management/server/networks/routers"
@@ -35,16 +34,6 @@ import (
 const (
 	geolocationDisabledKey = "NB_DISABLE_GEOLOCATION"
 )
-
-// migrationServer adapts BaseServer's store.Store and activity.Store
-// to the migration-specific MigrationStore/MigrationEventStore interfaces.
-type migrationServer struct {
-	store      migration.MigrationStore
-	eventStore migration.MigrationEventStore
-}
-
-func (m *migrationServer) Store() migration.MigrationStore           { return m.store }
-func (m *migrationServer) EventStore() migration.MigrationEventStore { return m.eventStore }
 
 func (s *BaseServer) GeoLocationManager() geolocation.Geolocation {
 	if os.Getenv(geolocationDisabledKey) == "true" {

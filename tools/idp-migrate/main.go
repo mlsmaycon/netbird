@@ -17,10 +17,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 
 	log "github.com/sirupsen/logrus"
@@ -38,12 +40,12 @@ import (
 
 // migrationServer implements migration.Server by wrapping the migration-specific interfaces.
 type migrationServer struct {
-	store      migration.MigrationStore
-	eventStore migration.MigrationEventStore
+	store      migration.Store
+	eventStore migration.EventStore
 }
 
-func (s *migrationServer) Store() migration.MigrationStore           { return s.store }
-func (s *migrationServer) EventStore() migration.MigrationEventStore { return s.eventStore }
+func (s *migrationServer) Store() migration.Store           { return s.store }
+func (s *migrationServer) EventStore() migration.EventStore { return s.eventStore }
 
 func main() {
 	var (
@@ -108,11 +110,11 @@ func run(configPath, dataDirOverride, idpSeedInfo string, dryRun, force, skipCon
 	}
 
 	conn, err := resolveConnector(idpSeedInfo, cfg)
+	if err != nil && errors.Is(err, ErrNoIdpManagerConfig) {
+		return fmt.Errorf("no connector configuration found: provide --idp-seed-info, set IDP_SEED_INFO env var, or configure IdpManagerConfig in management.json")
+	}
 	if err != nil {
 		return fmt.Errorf("resolve connector: %w", err)
-	}
-	if conn == nil {
-		return fmt.Errorf("no connector configuration found: provide --idp-seed-info, set IDP_SEED_INFO env var, or configure IdpManagerConfig in management.json")
 	}
 	if conn.ID == "" {
 		return fmt.Errorf("connector ID is empty")
@@ -196,7 +198,7 @@ func populateUserInfoFromIDP(cfg *nbconfig.Config, dataDir string, dryRun bool) 
 
 // openStores opens the main and activity stores, returning migration-specific interfaces.
 // The caller must call the returned cleanup function to close the stores.
-func openStores(ctx context.Context, cfg *nbconfig.Config, dataDir string) (migration.MigrationStore, migration.MigrationEventStore, func(), error) {
+func openStores(ctx context.Context, cfg *nbconfig.Config, dataDir string) (migration.Store, migration.EventStore, func(), error) {
 	engine := cfg.StoreConfig.Engine
 	if engine == "" {
 		engine = types.SqliteStoreEngine
@@ -216,7 +218,7 @@ func openStores(ctx context.Context, cfg *nbconfig.Config, dataDir string) (migr
 		mainStore.SetFieldEncrypt(fieldEncrypt)
 	}
 
-	migStore, ok := mainStore.(migration.MigrationStore)
+	migStore, ok := mainStore.(migration.Store)
 	if !ok {
 		_ = mainStore.Close(ctx)
 		return nil, nil, nil, fmt.Errorf("store does not support migration operations (ListUsers/UpdateUserID)")
@@ -224,7 +226,7 @@ func openStores(ctx context.Context, cfg *nbconfig.Config, dataDir string) (migr
 
 	cleanup := func() { _ = mainStore.Close(ctx) }
 
-	var migEventStore migration.MigrationEventStore
+	var migEventStore migration.EventStore
 	actStore, err := activitystore.NewSqlStore(ctx, dataDir, cfg.DataStoreEncryptionKey)
 	if err != nil {
 		log.Warnf("could not open activity store (events.db may not exist): %v", err)
@@ -283,7 +285,7 @@ func migrateDB(cfg *nbconfig.Config, dataDir string, conn *dex.Connector, dryRun
 
 // previewUsers counts pending vs already-migrated users and logs a summary.
 // Returns the number of users still needing migration.
-func previewUsers(ctx context.Context, migStore migration.MigrationStore) (int, error) {
+func previewUsers(ctx context.Context, migStore migration.Store) (int, error) {
 	users, err := migStore.ListUsers(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("list users: %w", err)
@@ -304,7 +306,7 @@ func previewUsers(ctx context.Context, migStore migration.MigrationStore) (int, 
 
 // confirmPrompt asks the user for interactive confirmation. Returns true if they accept.
 func confirmPrompt(pending int) bool {
-	fmt.Printf("About to migrate %d users. This cannot be easily undone. Continue? [y/N] ", pending)
+	log.Infof("About to migrate %d users. This cannot be easily undone. Continue? [y/N] ", pending)
 	reader := bufio.NewReader(os.Stdin)
 	answer, _ := reader.ReadString('\n')
 	answer = strings.TrimSpace(strings.ToLower(answer))
@@ -331,8 +333,15 @@ func resolveConnector(flagValue string, cfg *nbconfig.Config) (*dex.Connector, e
 	}
 
 	// Priority 2: env var
-	if migration.IsSeedInfoPresent() {
-		return migration.SeedConnectorFromEnv()
+	conn, err := migration.SeedConnectorFromEnv()
+	fmt.Println(conn, err)
+	if err != nil && !errors.Is(err, migration.ErrNoSeedInfo) {
+		return nil, fmt.Errorf("reading the IDP_SEED_INFO env var: %w - %v", err, reflect.TypeOf(err))
+	}
+
+	// If env var is set, return it, otherwise it was empty and we'll try auto-detect
+	if conn != nil {
+		return conn, nil
 	}
 
 	// Priority 3: auto-detect from config
@@ -354,6 +363,8 @@ func decodeConnector(encoded string) (*dex.Connector, error) {
 	return &conn, nil
 }
 
+var ErrNoIdpManagerConfig = errors.New("no IdpManagerConfig or IdpManagerConfig.ClientConfig found in management config file")
+
 // buildConnectorFromConfig constructs a Dex connector from management.json's
 // IdpManagerConfig fields (issuer, clientID, clientSecret, type).
 //
@@ -363,7 +374,7 @@ func decodeConnector(encoded string) (*dex.Connector, error) {
 func buildConnectorFromConfig(cfg *nbconfig.Config) (*dex.Connector, error) {
 	idpCfg := cfg.IdpManagerConfig
 	if idpCfg == nil || idpCfg.ClientConfig == nil {
-		return nil, nil
+		return nil, ErrNoIdpManagerConfig
 	}
 
 	managerType := strings.ToLower(idpCfg.ManagerType)
@@ -572,7 +583,7 @@ func generateConfig(configPath string, conn *dex.Connector, cfg *nbconfig.Config
 
 	if dryRun {
 		log.Info("[DRY RUN] new management.json would be:")
-		fmt.Println(string(newJSON))
+		log.Infoln(string(newJSON))
 		return nil
 	}
 

@@ -211,11 +211,12 @@ func applyOIDCDefaults(connType string, config map[string]interface{}) map[strin
 	setDefault(augmented, "insecureEnableGroups", true)
 	setDefault(augmented, "insecureSkipEmailVerified", true)
 
-	if connType == "zitadel" {
+	switch connType {
+	case "zitadel":
 		setDefault(augmented, "getUserInfo", true)
-	} else if connType == "entra" {
+	case "entra":
 		setDefault(augmented, "claimMapping", map[string]string{"email": "preferred_username"})
-	} else if connType == "okta" || connType == "pocketid" {
+	case "okta", "pocketid":
 		augmented["scopes"] = []string{"openid", "profile", "email", "groups"}
 	}
 

@@ -1,7 +1,7 @@
 package store
 
 // This file contains migration-only methods on SqlStore.
-// They satisfy the migration.MigrationStore interface via duck typing.
+// They satisfy the migration.Store interface via duck typing.
 // Delete this file when migration tooling is no longer needed.
 
 import (

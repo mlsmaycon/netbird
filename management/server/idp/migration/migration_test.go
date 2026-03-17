@@ -63,27 +63,27 @@ func (s *testStore) CheckSchema(checks []SchemaCheck) []SchemaError {
 }
 
 type testServer struct {
-	store      MigrationStore
-	eventStore MigrationEventStore
+	store      Store
+	eventStore EventStore
 }
 
-func (s *testServer) Store() MigrationStore        { return s.store }
-func (s *testServer) EventStore() MigrationEventStore { return s.eventStore }
+func (s *testServer) Store() Store           { return s.store }
+func (s *testServer) EventStore() EventStore { return s.eventStore }
 
 func TestSeedConnectorFromEnv(t *testing.T) {
-	t.Run("returns nil when env var is not set", func(t *testing.T) {
+	t.Run("returns ErrNoSeedInfo when env var is not set", func(t *testing.T) {
 		os.Unsetenv(idpSeedInfoKey)
 
 		conn, err := SeedConnectorFromEnv()
-		assert.NoError(t, err)
+		assert.ErrorIs(t, err, ErrNoSeedInfo)
 		assert.Nil(t, conn)
 	})
 
-	t.Run("returns nil when env var is empty", func(t *testing.T) {
+	t.Run("returns ErrNoSeedInfo when env var is empty", func(t *testing.T) {
 		t.Setenv(idpSeedInfoKey, "")
 
 		conn, err := SeedConnectorFromEnv()
-		assert.NoError(t, err)
+		assert.ErrorIs(t, err, ErrNoSeedInfo)
 		assert.Nil(t, conn)
 	})
 
@@ -91,6 +91,7 @@ func TestSeedConnectorFromEnv(t *testing.T) {
 		t.Setenv(idpSeedInfoKey, "not-valid-base64!!!")
 
 		conn, err := SeedConnectorFromEnv()
+		assert.NotErrorIs(t, err, ErrNoSeedInfo)
 		assert.Error(t, err)
 		assert.Nil(t, conn)
 		assert.Contains(t, err.Error(), "base64 decode")
@@ -101,6 +102,7 @@ func TestSeedConnectorFromEnv(t *testing.T) {
 		t.Setenv(idpSeedInfoKey, encoded)
 
 		conn, err := SeedConnectorFromEnv()
+		assert.NotErrorIs(t, err, ErrNoSeedInfo)
 		assert.Error(t, err)
 		assert.Nil(t, conn)
 		assert.Contains(t, err.Error(), "json unmarshal")
@@ -131,26 +133,6 @@ func TestSeedConnectorFromEnv(t *testing.T) {
 		assert.Equal(t, expected.Name, conn.Name)
 		assert.Equal(t, expected.ID, conn.ID)
 		assert.Equal(t, expected.Config["issuer"], conn.Config["issuer"])
-	})
-}
-
-func TestIsSeedInfoPresent(t *testing.T) {
-	t.Run("returns false when env var is not set", func(t *testing.T) {
-		os.Unsetenv(idpSeedInfoKey)
-
-		assert.False(t, IsSeedInfoPresent())
-	})
-
-	t.Run("returns false when env var is empty", func(t *testing.T) {
-		t.Setenv(idpSeedInfoKey, "")
-
-		assert.False(t, IsSeedInfoPresent())
-	})
-
-	t.Run("returns true when env var is set to a value", func(t *testing.T) {
-		t.Setenv(idpSeedInfoKey, "some-value")
-
-		assert.True(t, IsSeedInfoPresent())
 	})
 }
 
