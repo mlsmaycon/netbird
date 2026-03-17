@@ -114,6 +114,9 @@ type Store interface {
 
 	GetProxyAccessTokenByHashedToken(ctx context.Context, lockStrength LockingStrength, hashedToken types.HashedProxyToken) (*types.ProxyAccessToken, error)
 	GetAllProxyAccessTokens(ctx context.Context, lockStrength LockingStrength) ([]*types.ProxyAccessToken, error)
+	GetProxyAccessTokensByAccountID(ctx context.Context, lockStrength LockingStrength, accountID string) ([]*types.ProxyAccessToken, error)
+	GetProxyAccessTokenByID(ctx context.Context, lockStrength LockingStrength, tokenID string) (*types.ProxyAccessToken, error)
+	IsProxyAccessTokenValid(ctx context.Context, tokenID string) (bool, error)
 	SaveProxyAccessToken(ctx context.Context, token *types.ProxyAccessToken) error
 	RevokeProxyAccessToken(ctx context.Context, tokenID string) error
 	MarkProxyAccessTokenUsed(ctx context.Context, tokenID string) error
@@ -282,9 +285,15 @@ type Store interface {
 	DeleteServiceTargets(ctx context.Context, accountID string, serviceID string) error
 
 	SaveProxy(ctx context.Context, proxy *proxy.Proxy) error
+	DisconnectProxy(ctx context.Context, proxyID string) error
 	UpdateProxyHeartbeat(ctx context.Context, proxyID string) error
 	GetActiveProxyClusterAddresses(ctx context.Context) ([]string, error)
+	GetActiveProxyClusterAddressesForAccount(ctx context.Context, accountID string) ([]string, error)
 	CleanupStaleProxies(ctx context.Context, inactivityDuration time.Duration) error
+	GetProxyByAccountID(ctx context.Context, accountID string) (*proxy.Proxy, error)
+	CountProxiesByAccountID(ctx context.Context, accountID string) (int64, error)
+	IsClusterAddressConflicting(ctx context.Context, clusterAddress, accountID string) (bool, error)
+	DeleteProxy(ctx context.Context, proxyID string) error
 
 	GetCustomDomainsCounts(ctx context.Context) (total int64, validated int64, err error)
 }

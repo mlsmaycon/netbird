@@ -214,6 +214,7 @@ func setupAuthCallbackTest(t *testing.T) *testSetup {
 		nil,
 		usersManager,
 		nil,
+		nil,
 	)
 
 	proxyService.SetServiceManager(&testServiceManager{store: testStore})
@@ -432,6 +433,10 @@ func (m *testServiceManager) StopServiceFromPeer(_ context.Context, _, _, _ stri
 }
 
 func (m *testServiceManager) StartExposeReaper(_ context.Context) {}
+
+func (m *testServiceManager) GetServiceByDomain(ctx context.Context, domain string) (*service.Service, error) {
+	return m.store.GetServiceByDomain(ctx, domain)
+}
 
 func createTestState(t *testing.T, ps *nbgrpc.ProxyServiceServer, redirectURL string) string {
 	t.Helper()

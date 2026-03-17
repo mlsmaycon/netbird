@@ -627,6 +627,10 @@ func (m *Manager) GetAccountServices(ctx context.Context, accountID string) ([]*
 	return services, nil
 }
 
+func (m *Manager) GetServiceByDomain(ctx context.Context, domain string) (*service.Service, error) {
+	return m.store.GetServiceByDomain(ctx, domain)
+}
+
 func (m *Manager) GetServiceIDByTargetID(ctx context.Context, accountID string, resourceID string) (string, error) {
 	target, err := m.store.GetServiceTargetByTargetID(ctx, store.LockingStrengthNone, accountID, resourceID)
 	if err != nil {

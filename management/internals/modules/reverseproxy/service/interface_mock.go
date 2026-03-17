@@ -122,6 +122,21 @@ func (mr *MockManagerMockRecorder) GetAllServices(ctx, accountID, userID interfa
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAllServices", reflect.TypeOf((*MockManager)(nil).GetAllServices), ctx, accountID, userID)
 }
 
+// GetServiceByDomain mocks base method.
+func (m *MockManager) GetServiceByDomain(ctx context.Context, domain string) (*Service, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetServiceByDomain", ctx, domain)
+	ret0, _ := ret[0].(*Service)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetServiceByDomain indicates an expected call of GetServiceByDomain.
+func (mr *MockManagerMockRecorder) GetServiceByDomain(ctx, domain interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetServiceByDomain", reflect.TypeOf((*MockManager)(nil).GetServiceByDomain), ctx, domain)
+}
+
 // GetGlobalServices mocks base method.
 func (m *MockManager) GetGlobalServices(ctx context.Context) ([]*Service, error) {
 	m.ctrl.T.Helper()

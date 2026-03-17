@@ -90,6 +90,17 @@ func (m *mockReverseProxyManager) StopServiceFromPeer(_ context.Context, _, _, _
 
 func (m *mockReverseProxyManager) StartExposeReaper(_ context.Context) {}
 
+func (m *mockReverseProxyManager) GetServiceByDomain(_ context.Context, domain string) (*service.Service, error) {
+	for _, services := range m.proxiesByAccount {
+		for _, svc := range services {
+			if svc.Domain == domain {
+				return svc, nil
+			}
+		}
+	}
+	return nil, errors.New("service not found for domain: " + domain)
+}
+
 type mockUsersManager struct {
 	users map[string]*types.User
 	err   error

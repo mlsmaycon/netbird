@@ -13,9 +13,15 @@ import (
 // store defines the interface for proxy persistence operations
 type store interface {
 	SaveProxy(ctx context.Context, p *proxy.Proxy) error
+	DisconnectProxy(ctx context.Context, proxyID string) error
 	UpdateProxyHeartbeat(ctx context.Context, proxyID string) error
 	GetActiveProxyClusterAddresses(ctx context.Context) ([]string, error)
+	GetActiveProxyClusterAddressesForAccount(ctx context.Context, accountID string) ([]string, error)
 	CleanupStaleProxies(ctx context.Context, inactivityDuration time.Duration) error
+	GetProxyByAccountID(ctx context.Context, accountID string) (*proxy.Proxy, error)
+	CountProxiesByAccountID(ctx context.Context, accountID string) (int64, error)
+	IsClusterAddressConflicting(ctx context.Context, clusterAddress, accountID string) (bool, error)
+	DeleteProxy(ctx context.Context, proxyID string) error
 }
 
 // Manager handles all proxy operations
@@ -38,15 +44,16 @@ func NewManager(store store, meter metric.Meter) (*Manager, error) {
 }
 
 // Connect registers a new proxy connection in the database
-func (m Manager) Connect(ctx context.Context, proxyID, clusterAddress, ipAddress string) error {
+func (m *Manager) Connect(ctx context.Context, proxyID, clusterAddress, ipAddress string, accountID *string) error {
 	now := time.Now()
 	p := &proxy.Proxy{
 		ID:             proxyID,
 		ClusterAddress: clusterAddress,
 		IPAddress:      ipAddress,
+		AccountID:      accountID,
 		LastSeen:       now,
 		ConnectedAt:    &now,
-		Status:         "connected",
+		Status:         proxy.StatusConnected,
 	}
 
 	if err := m.store.SaveProxy(ctx, p); err != nil {
@@ -64,16 +71,8 @@ func (m Manager) Connect(ctx context.Context, proxyID, clusterAddress, ipAddress
 }
 
 // Disconnect marks a proxy as disconnected in the database
-func (m Manager) Disconnect(ctx context.Context, proxyID string) error {
-	now := time.Now()
-	p := &proxy.Proxy{
-		ID:             proxyID,
-		Status:         "disconnected",
-		DisconnectedAt: &now,
-		LastSeen:       now,
-	}
-
-	if err := m.store.SaveProxy(ctx, p); err != nil {
+func (m *Manager) Disconnect(ctx context.Context, proxyID string) error {
+	if err := m.store.DisconnectProxy(ctx, proxyID); err != nil {
 		log.WithContext(ctx).Errorf("failed to disconnect proxy %s: %v", proxyID, err)
 		return err
 	}
@@ -86,7 +85,7 @@ func (m Manager) Disconnect(ctx context.Context, proxyID string) error {
 }
 
 // Heartbeat updates the proxy's last seen timestamp
-func (m Manager) Heartbeat(ctx context.Context, proxyID string) error {
+func (m *Manager) Heartbeat(ctx context.Context, proxyID string) error {
 	if err := m.store.UpdateProxyHeartbeat(ctx, proxyID); err != nil {
 		log.WithContext(ctx).Debugf("failed to update proxy %s heartbeat: %v", proxyID, err)
 		return err
@@ -96,7 +95,7 @@ func (m Manager) Heartbeat(ctx context.Context, proxyID string) error {
 }
 
 // GetActiveClusterAddresses returns all unique cluster addresses for active proxies
-func (m Manager) GetActiveClusterAddresses(ctx context.Context) ([]string, error) {
+func (m *Manager) GetActiveClusterAddresses(ctx context.Context) ([]string, error) {
 	addresses, err := m.store.GetActiveProxyClusterAddresses(ctx)
 	if err != nil {
 		log.WithContext(ctx).Errorf("failed to get active proxy cluster addresses: %v", err)
@@ -106,10 +105,44 @@ func (m Manager) GetActiveClusterAddresses(ctx context.Context) ([]string, error
 }
 
 // CleanupStale removes proxies that haven't sent heartbeat in the specified duration
-func (m Manager) CleanupStale(ctx context.Context, inactivityDuration time.Duration) error {
+func (m *Manager) CleanupStale(ctx context.Context, inactivityDuration time.Duration) error {
 	if err := m.store.CleanupStaleProxies(ctx, inactivityDuration); err != nil {
 		log.WithContext(ctx).Errorf("failed to cleanup stale proxies: %v", err)
 		return err
 	}
 	return nil
 }
+
+func (m *Manager) GetActiveClusterAddressesForAccount(ctx context.Context, accountID string) ([]string, error) {
+	addresses, err := m.store.GetActiveProxyClusterAddressesForAccount(ctx, accountID)
+	if err != nil {
+		log.WithContext(ctx).Errorf("failed to get active proxy cluster addresses for account %s: %v", accountID, err)
+		return nil, err
+	}
+	return addresses, nil
+}
+
+func (m *Manager) GetAccountProxy(ctx context.Context, accountID string) (*proxy.Proxy, error) {
+	return m.store.GetProxyByAccountID(ctx, accountID)
+}
+
+func (m *Manager) CountAccountProxies(ctx context.Context, accountID string) (int64, error) {
+	return m.store.CountProxiesByAccountID(ctx, accountID)
+}
+
+func (m *Manager) IsClusterAddressAvailable(ctx context.Context, clusterAddress, accountID string) (bool, error) {
+	conflicting, err := m.store.IsClusterAddressConflicting(ctx, clusterAddress, accountID)
+	if err != nil {
+		return false, err
+	}
+	return !conflicting, nil
+}
+
+func (m *Manager) DeleteProxy(ctx context.Context, proxyID string) error {
+	if err := m.store.DeleteProxy(ctx, proxyID); err != nil {
+		log.WithContext(ctx).Errorf("failed to delete proxy %s: %v", proxyID, err)
+		return err
+	}
+	return nil
+}
+

@@ -3151,6 +3151,86 @@ components:
           description: Whether link auth is enabled
       required:
         - enabled
+    ProxyTokenRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Human-readable token name
+          example: "my-proxy-token"
+        expires_in:
+          type: integer
+          description: Token expiration in seconds (0 = never expires)
+          example: 0
+      required:
+        - name
+    ProxyToken:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        last_used:
+          type: string
+          format: date-time
+        revoked:
+          type: boolean
+      required:
+        - id
+        - name
+        - created_at
+        - revoked
+    ProxyTokenCreated:
+      type: object
+      description: Returned on creation — plain_token is shown only once
+      allOf:
+        - $ref: '#/components/schemas/ProxyToken'
+        - type: object
+          properties:
+            plain_token:
+              type: string
+              description: The plain text token (shown only once)
+              example: "nbx_abc123..."
+          required:
+            - plain_token
+    SelfHostedProxy:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Proxy instance ID
+        cluster_address:
+          type: string
+          description: Cluster domain or IP address
+          example: "proxy.example.com"
+        ip_address:
+          type: string
+          description: Proxy IP address
+        status:
+          type: string
+          enum: [ connected, disconnected ]
+        last_seen:
+          type: string
+          format: date-time
+        connected_at:
+          type: string
+          format: date-time
+        service_count:
+          type: integer
+          description: Number of services routed through this proxy's cluster
+      required:
+        - id
+        - cluster_address
+        - status
+        - last_seen
+        - service_count
     ProxyCluster:
       type: object
       description: A proxy cluster represents a group of proxy nodes serving the same address
@@ -9617,6 +9697,131 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /api/reverse-proxies/proxy-tokens:
+    get:
+      summary: List Proxy Tokens
+      description: Returns all proxy access tokens for the account
+      tags: [ Self-Hosted Proxies ]
+      security:
+        - BearerAuth: [ ]
+        - TokenAuth: [ ]
+      responses:
+        '200':
+          description: A JSON Array of proxy tokens
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProxyToken'
+        '401':
+          "$ref": "#/components/responses/requires_authentication"
+        '403':
+          "$ref": "#/components/responses/forbidden"
+        '500':
+          "$ref": "#/components/responses/internal_error"
+    post:
+      summary: Create a Proxy Token
+      description: Generate an account-scoped proxy access token for self-hosted proxy registration
+      tags: [ Self-Hosted Proxies ]
+      security:
+        - BearerAuth: [ ]
+        - TokenAuth: [ ]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProxyTokenRequest'
+      responses:
+        '200':
+          description: Proxy token created (plain token shown once)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProxyTokenCreated'
+        '400':
+          "$ref": "#/components/responses/bad_request"
+        '401':
+          "$ref": "#/components/responses/requires_authentication"
+        '403':
+          "$ref": "#/components/responses/forbidden"
+        '500':
+          "$ref": "#/components/responses/internal_error"
+  /api/reverse-proxies/proxy-tokens/{tokenId}:
+    delete:
+      summary: Revoke a Proxy Token
+      description: Revoke an account-scoped proxy access token
+      tags: [ Self-Hosted Proxies ]
+      security:
+        - BearerAuth: [ ]
+        - TokenAuth: [ ]
+      parameters:
+        - in: path
+          name: tokenId
+          required: true
+          schema:
+            type: string
+          description: The unique identifier of the proxy token
+      responses:
+        '200':
+          description: Token revoked
+        '401':
+          "$ref": "#/components/responses/requires_authentication"
+        '403':
+          "$ref": "#/components/responses/forbidden"
+        '404':
+          "$ref": "#/components/responses/not_found"
+        '500':
+          "$ref": "#/components/responses/internal_error"
+  /api/reverse-proxies/self-hosted-proxies:
+    get:
+      summary: List Self-Hosted Proxies
+      description: Returns self-hosted proxies registered for the account
+      tags: [ Self-Hosted Proxies ]
+      security:
+        - BearerAuth: [ ]
+        - TokenAuth: [ ]
+      responses:
+        '200':
+          description: A JSON Array of self-hosted proxies
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SelfHostedProxy'
+        '401':
+          "$ref": "#/components/responses/requires_authentication"
+        '403':
+          "$ref": "#/components/responses/forbidden"
+        '500':
+          "$ref": "#/components/responses/internal_error"
+  /api/reverse-proxies/self-hosted-proxies/{proxyId}:
+    delete:
+      summary: Delete a Self-Hosted Proxy
+      description: Remove a self-hosted proxy from the account
+      tags: [ Self-Hosted Proxies ]
+      security:
+        - BearerAuth: [ ]
+        - TokenAuth: [ ]
+      parameters:
+        - in: path
+          name: proxyId
+          required: true
+          schema:
+            type: string
+          description: The unique identifier of the proxy
+      responses:
+        '200':
+          description: Proxy deleted
+        '401':
+          "$ref": "#/components/responses/requires_authentication"
+        '403':
+          "$ref": "#/components/responses/forbidden"
+        '404':
+          "$ref": "#/components/responses/not_found"
+        '500':
+          "$ref": "#/components/responses/internal_error"
   /api/reverse-proxies/services:
     get:
       summary: List all Services

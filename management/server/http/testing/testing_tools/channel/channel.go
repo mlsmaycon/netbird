@@ -107,7 +107,7 @@ func BuildApiBlackBoxWithDBState(t testing_tools.TB, sqlFile string, expectedPee
 	if err != nil {
 		t.Fatalf("Failed to create proxy manager: %v", err)
 	}
-	proxyServiceServer := nbgrpc.NewProxyServiceServer(accessLogsManager, proxyTokenStore, pkceverifierStore, nbgrpc.ProxyOIDCConfig{}, peersManager, userManager, proxyMgr)
+	proxyServiceServer := nbgrpc.NewProxyServiceServer(accessLogsManager, proxyTokenStore, pkceverifierStore, nbgrpc.ProxyOIDCConfig{}, peersManager, userManager, proxyMgr, nil)
 	domainManager := manager.NewManager(store, proxyMgr, permissionsManager, am)
 	serviceProxyController, err := proxymanager.NewGRPCController(proxyServiceServer, noopMeter)
 	if err != nil {
@@ -133,7 +133,7 @@ func BuildApiBlackBoxWithDBState(t testing_tools.TB, sqlFile string, expectedPee
 	customZonesManager := zonesManager.NewManager(store, am, permissionsManager, "")
 	zoneRecordsManager := recordsManager.NewManager(store, am, permissionsManager)
 
-	apiHandler, err := http2.NewAPIHandler(context.Background(), am, networksManagerMock, resourcesManagerMock, routersManagerMock, groupsManagerMock, geoMock, authManagerMock, metrics, validatorMock, proxyController, permissionsManager, peersManager, settingsManager, customZonesManager, zoneRecordsManager, networkMapController, nil, serviceManager, nil, nil, nil, nil)
+	apiHandler, err := http2.NewAPIHandler(context.Background(), am, networksManagerMock, resourcesManagerMock, routersManagerMock, groupsManagerMock, geoMock, authManagerMock, metrics, validatorMock, proxyController, permissionsManager, peersManager, settingsManager, customZonesManager, zoneRecordsManager, networkMapController, nil, serviceManager, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Failed to create API handler: %v", err)
 	}

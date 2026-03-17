@@ -139,6 +139,7 @@ func setupIntegrationTest(t *testing.T) *integrationTestSetup {
 		nil,
 		usersManager,
 		proxyManager,
+		nil,
 	)
 
 	// Use store-backed service manager
@@ -200,7 +201,7 @@ func (m *testAccessLogManager) GetAllAccessLogs(_ context.Context, _, _ string, 
 // testProxyManager is a mock implementation of proxy.Manager for testing.
 type testProxyManager struct{}
 
-func (m *testProxyManager) Connect(_ context.Context, _, _, _ string) error {
+func (m *testProxyManager) Connect(_ context.Context, _, _, _ string, _ *string) error {
 	return nil
 }
 
@@ -216,7 +217,27 @@ func (m *testProxyManager) GetActiveClusterAddresses(_ context.Context) ([]strin
 	return nil, nil
 }
 
+func (m *testProxyManager) GetActiveClusterAddressesForAccount(_ context.Context, _ string) ([]string, error) {
+	return nil, nil
+}
+
 func (m *testProxyManager) CleanupStale(_ context.Context, _ time.Duration) error {
+	return nil
+}
+
+func (m *testProxyManager) GetAccountProxy(_ context.Context, _ string) (*nbproxy.Proxy, error) {
+	return nil, nil
+}
+
+func (m *testProxyManager) CountAccountProxies(_ context.Context, _ string) (int64, error) {
+	return 0, nil
+}
+
+func (m *testProxyManager) IsClusterAddressAvailable(_ context.Context, _, _ string) (bool, error) {
+	return true, nil
+}
+
+func (m *testProxyManager) DeleteProxy(_ context.Context, _ string) error {
 	return nil
 }
 
@@ -318,6 +339,10 @@ func (m *storeBackedServiceManager) StopServiceFromPeer(_ context.Context, _, _,
 }
 
 func (m *storeBackedServiceManager) StartExposeReaper(_ context.Context) {}
+
+func (m *storeBackedServiceManager) GetServiceByDomain(ctx context.Context, domain string) (*service.Service, error) {
+	return m.store.GetServiceByDomain(ctx, domain)
+}
 
 func strPtr(s string) *string {
 	return &s

@@ -51,17 +51,17 @@ func (mr *MockManagerMockRecorder) CleanupStale(ctx, inactivityDuration interfac
 }
 
 // Connect mocks base method.
-func (m *MockManager) Connect(ctx context.Context, proxyID, clusterAddress, ipAddress string) error {
+func (m *MockManager) Connect(ctx context.Context, proxyID, clusterAddress, ipAddress string, accountID *string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Connect", ctx, proxyID, clusterAddress, ipAddress)
+	ret := m.ctrl.Call(m, "Connect", ctx, proxyID, clusterAddress, ipAddress, accountID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Connect indicates an expected call of Connect.
-func (mr *MockManagerMockRecorder) Connect(ctx, proxyID, clusterAddress, ipAddress interface{}) *gomock.Call {
+func (mr *MockManagerMockRecorder) Connect(ctx, proxyID, clusterAddress, ipAddress, accountID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Connect", reflect.TypeOf((*MockManager)(nil).Connect), ctx, proxyID, clusterAddress, ipAddress)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Connect", reflect.TypeOf((*MockManager)(nil).Connect), ctx, proxyID, clusterAddress, ipAddress, accountID)
 }
 
 // Disconnect mocks base method.
@@ -93,6 +93,21 @@ func (mr *MockManagerMockRecorder) GetActiveClusterAddresses(ctx interface{}) *g
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetActiveClusterAddresses", reflect.TypeOf((*MockManager)(nil).GetActiveClusterAddresses), ctx)
 }
 
+// GetActiveClusterAddressesForAccount mocks base method.
+func (m *MockManager) GetActiveClusterAddressesForAccount(ctx context.Context, accountID string) ([]string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetActiveClusterAddressesForAccount", ctx, accountID)
+	ret0, _ := ret[0].([]string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetActiveClusterAddressesForAccount indicates an expected call of GetActiveClusterAddressesForAccount.
+func (mr *MockManagerMockRecorder) GetActiveClusterAddressesForAccount(ctx, accountID interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetActiveClusterAddressesForAccount", reflect.TypeOf((*MockManager)(nil).GetActiveClusterAddressesForAccount), ctx, accountID)
+}
+
 // Heartbeat mocks base method.
 func (m *MockManager) Heartbeat(ctx context.Context, proxyID string) error {
 	m.ctrl.T.Helper()
@@ -105,6 +120,65 @@ func (m *MockManager) Heartbeat(ctx context.Context, proxyID string) error {
 func (mr *MockManagerMockRecorder) Heartbeat(ctx, proxyID interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Heartbeat", reflect.TypeOf((*MockManager)(nil).Heartbeat), ctx, proxyID)
+}
+
+// GetAccountProxy mocks base method.
+func (m *MockManager) GetAccountProxy(ctx context.Context, accountID string) (*Proxy, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetAccountProxy", ctx, accountID)
+	ret0, _ := ret[0].(*Proxy)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetAccountProxy indicates an expected call of GetAccountProxy.
+func (mr *MockManagerMockRecorder) GetAccountProxy(ctx, accountID interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAccountProxy", reflect.TypeOf((*MockManager)(nil).GetAccountProxy), ctx, accountID)
+}
+
+// CountAccountProxies mocks base method.
+func (m *MockManager) CountAccountProxies(ctx context.Context, accountID string) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CountAccountProxies", ctx, accountID)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CountAccountProxies indicates an expected call of CountAccountProxies.
+func (mr *MockManagerMockRecorder) CountAccountProxies(ctx, accountID interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountAccountProxies", reflect.TypeOf((*MockManager)(nil).CountAccountProxies), ctx, accountID)
+}
+
+// IsClusterAddressAvailable mocks base method.
+func (m *MockManager) IsClusterAddressAvailable(ctx context.Context, clusterAddress, accountID string) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsClusterAddressAvailable", ctx, clusterAddress, accountID)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// IsClusterAddressAvailable indicates an expected call of IsClusterAddressAvailable.
+func (mr *MockManagerMockRecorder) IsClusterAddressAvailable(ctx, clusterAddress, accountID interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsClusterAddressAvailable", reflect.TypeOf((*MockManager)(nil).IsClusterAddressAvailable), ctx, clusterAddress, accountID)
+}
+
+// DeleteProxy mocks base method.
+func (m *MockManager) DeleteProxy(ctx context.Context, proxyID string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteProxy", ctx, proxyID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// DeleteProxy indicates an expected call of DeleteProxy.
+func (mr *MockManagerMockRecorder) DeleteProxy(ctx, proxyID interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteProxy", reflect.TypeOf((*MockManager)(nil).DeleteProxy), ctx, proxyID)
 }
 
 // MockController is a mock of Controller interface.

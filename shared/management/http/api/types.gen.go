@@ -859,6 +859,24 @@ func (e ReverseProxyDomainType) Valid() bool {
 	}
 }
 
+// Defines values for SelfHostedProxyStatus.
+const (
+	SelfHostedProxyStatusConnected    SelfHostedProxyStatus = "connected"
+	SelfHostedProxyStatusDisconnected SelfHostedProxyStatus = "disconnected"
+)
+
+// Valid indicates whether the value is a known member of the SelfHostedProxyStatus enum.
+func (e SelfHostedProxyStatus) Valid() bool {
+	switch e {
+	case SelfHostedProxyStatusConnected:
+		return true
+	case SelfHostedProxyStatusDisconnected:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SentinelOneMatchAttributesNetworkStatus.
 const (
 	SentinelOneMatchAttributesNetworkStatusConnected    SentinelOneMatchAttributesNetworkStatus = "connected"
@@ -3292,6 +3310,38 @@ type ProxyCluster struct {
 	ConnectedProxies int `json:"connected_proxies"`
 }
 
+// ProxyToken defines model for ProxyToken.
+type ProxyToken struct {
+	CreatedAt time.Time  `json:"created_at"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	Id        string     `json:"id"`
+	LastUsed  *time.Time `json:"last_used,omitempty"`
+	Name      string     `json:"name"`
+	Revoked   bool       `json:"revoked"`
+}
+
+// ProxyTokenCreated defines model for ProxyTokenCreated.
+type ProxyTokenCreated struct {
+	CreatedAt time.Time  `json:"created_at"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	Id        string     `json:"id"`
+	LastUsed  *time.Time `json:"last_used,omitempty"`
+	Name      string     `json:"name"`
+
+	// PlainToken The plain text token (shown only once)
+	PlainToken string `json:"plain_token"`
+	Revoked    bool   `json:"revoked"`
+}
+
+// ProxyTokenRequest defines model for ProxyTokenRequest.
+type ProxyTokenRequest struct {
+	// ExpiresIn Token expiration in seconds (0 = never expires)
+	ExpiresIn *int `json:"expires_in,omitempty"`
+
+	// Name Human-readable token name
+	Name string `json:"name"`
+}
+
 // Resource defines model for Resource.
 type Resource struct {
 	// Id ID of the resource
@@ -3460,6 +3510,27 @@ type ScimTokenResponse struct {
 	// AuthToken The newly generated SCIM API token
 	AuthToken string `json:"auth_token"`
 }
+
+// SelfHostedProxy defines model for SelfHostedProxy.
+type SelfHostedProxy struct {
+	// ClusterAddress Cluster domain or IP address
+	ClusterAddress string     `json:"cluster_address"`
+	ConnectedAt    *time.Time `json:"connected_at,omitempty"`
+
+	// Id Proxy instance ID
+	Id string `json:"id"`
+
+	// IpAddress Proxy IP address
+	IpAddress *string   `json:"ip_address,omitempty"`
+	LastSeen  time.Time `json:"last_seen"`
+
+	// ServiceCount Number of services routed through this proxy's cluster
+	ServiceCount int                   `json:"service_count"`
+	Status       SelfHostedProxyStatus `json:"status"`
+}
+
+// SelfHostedProxyStatus defines model for SelfHostedProxy.Status.
+type SelfHostedProxyStatus string
 
 // SentinelOneMatchAttributes Attribute conditions to match when approving agents
 type SentinelOneMatchAttributes struct {
@@ -4480,6 +4551,9 @@ type PutApiPostureChecksPostureCheckIdJSONRequestBody = PostureCheckUpdate
 
 // PostApiReverseProxiesDomainsJSONRequestBody defines body for PostApiReverseProxiesDomains for application/json ContentType.
 type PostApiReverseProxiesDomainsJSONRequestBody = ReverseProxyDomainRequest
+
+// PostApiReverseProxiesProxyTokensJSONRequestBody defines body for PostApiReverseProxiesProxyTokens for application/json ContentType.
+type PostApiReverseProxiesProxyTokensJSONRequestBody = ProxyTokenRequest
 
 // PostApiReverseProxiesServicesJSONRequestBody defines body for PostApiReverseProxiesServices for application/json ContentType.
 type PostApiReverseProxiesServicesJSONRequestBody = ServiceRequest
