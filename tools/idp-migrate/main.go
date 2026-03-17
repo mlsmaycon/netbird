@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"reflect"
 	"strings"
 
 	log "github.com/sirupsen/logrus"
@@ -334,9 +333,8 @@ func resolveConnector(flagValue string, cfg *nbconfig.Config) (*dex.Connector, e
 
 	// Priority 2: env var
 	conn, err := migration.SeedConnectorFromEnv()
-	fmt.Println(conn, err)
 	if err != nil && !errors.Is(err, migration.ErrNoSeedInfo) {
-		return nil, fmt.Errorf("reading the IDP_SEED_INFO env var: %w - %v", err, reflect.TypeOf(err))
+		return nil, fmt.Errorf("reading the IDP_SEED_INFO env var: %w", err)
 	}
 
 	// If env var is set, return it, otherwise it was empty and we'll try auto-detect
