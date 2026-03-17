@@ -191,6 +191,10 @@ func (am *DefaultAccountManager) createNewIdpUser(ctx context.Context, accountID
 // Unlike createNewIdpUser, this method fetches user data directly from the database
 // since the embedded IdP usage ensures the username and email are stored locally in the User table.
 func (am *DefaultAccountManager) createEmbeddedIdpUser(ctx context.Context, accountID string, inviterID string, invite *types.UserInfo) (*idp.UserData, error) {
+	if IsLocalAuthDisabled(ctx, am.idpManager) {
+		return nil, status.Errorf(status.PreconditionFailed, "local user creation is disabled - use an external identity provider")
+	}
+
 	inviter, err := am.Store.GetUserByUserID(ctx, store.LockingStrengthNone, inviterID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get inviter user: %w", err)
@@ -733,6 +737,19 @@ func (am *DefaultAccountManager) processUserUpdate(ctx context.Context, transact
 		return false, nil, nil, nil, status.Errorf(status.InvalidArgument, "provided user update is nil")
 	}
 
+	if initiatorUserId != activity.SystemInitiator {
+		freshInitiator, err := transaction.GetUserByUserID(ctx, store.LockingStrengthUpdate, initiatorUserId)
+		if err != nil {
+			return false, nil, nil, nil, fmt.Errorf("failed to re-read initiator user in transaction: %w", err)
+		}
+
+		// Ensure the initiator still has admin privileges
+		if initiatorUser.HasAdminPower() && !freshInitiator.HasAdminPower() {
+			return false, nil, nil, nil, status.Errorf(status.PermissionDenied, "initiator role was changed during request processing")
+		}
+		initiatorUser = freshInitiator
+	}
+
 	oldUser, isNewUser, err := getUserOrCreateIfNotExists(ctx, transaction, accountID, update, addIfNotExists)
 	if err != nil {
 		return false, nil, nil, nil, err
@@ -860,7 +877,6 @@ func validateUserUpdate(groupsMap map[string]*types.Group, initiatorUser, oldUse
 		return nil
 	}
 
-	// @todo double check these
 	if initiatorUser.HasAdminPower() && initiatorUser.Id == update.Id && oldUser.Blocked != update.Blocked {
 		return status.Errorf(status.PermissionDenied, "admins can't block or unblock themselves")
 	}
@@ -1462,6 +1478,10 @@ func (am *DefaultAccountManager) CreateUserInvite(ctx context.Context, accountID
 		return nil, status.Errorf(status.PreconditionFailed, "invite links are only available with embedded identity provider")
 	}
 
+	if IsLocalAuthDisabled(ctx, am.idpManager) {
+		return nil, status.Errorf(status.PreconditionFailed, "local user creation is disabled - use an external identity provider")
+	}
+
 	if err := validateUserInvite(invite); err != nil {
 		return nil, err
 	}
@@ -1619,6 +1639,10 @@ func (am *DefaultAccountManager) ListUserInvites(ctx context.Context, accountID,
 func (am *DefaultAccountManager) AcceptUserInvite(ctx context.Context, token, password string) error {
 	if !IsEmbeddedIdp(am.idpManager) {
 		return status.Errorf(status.PreconditionFailed, "invite links are only available with embedded identity provider")
+	}
+
+	if IsLocalAuthDisabled(ctx, am.idpManager) {
+		return status.Errorf(status.PreconditionFailed, "local user creation is disabled - use an external identity provider")
 	}
 
 	if password == "" {

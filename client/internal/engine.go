@@ -29,12 +29,14 @@ import (
 	firewallManager "github.com/netbirdio/netbird/client/firewall/manager"
 	"github.com/netbirdio/netbird/client/iface"
 	"github.com/netbirdio/netbird/client/iface/device"
+	nbnetstack "github.com/netbirdio/netbird/client/iface/netstack"
 	"github.com/netbirdio/netbird/client/iface/udpmux"
 	"github.com/netbirdio/netbird/client/internal/acl"
 	"github.com/netbirdio/netbird/client/internal/debug"
 	"github.com/netbirdio/netbird/client/internal/dns"
 	dnsconfig "github.com/netbirdio/netbird/client/internal/dns/config"
 	"github.com/netbirdio/netbird/client/internal/dnsfwd"
+	"github.com/netbirdio/netbird/client/internal/expose"
 	"github.com/netbirdio/netbird/client/internal/ingressgw"
 	"github.com/netbirdio/netbird/client/internal/netflow"
 	nftypes "github.com/netbirdio/netbird/client/internal/netflow/types"
@@ -50,16 +52,14 @@ import (
 	"github.com/netbirdio/netbird/client/internal/routemanager"
 	"github.com/netbirdio/netbird/client/internal/routemanager/systemops"
 	"github.com/netbirdio/netbird/client/internal/statemanager"
-	"github.com/netbirdio/netbird/client/internal/updatemanager"
+	"github.com/netbirdio/netbird/client/internal/updater"
 	"github.com/netbirdio/netbird/client/jobexec"
 	cProto "github.com/netbirdio/netbird/client/proto"
-	"github.com/netbirdio/netbird/shared/management/domain"
-	semaphoregroup "github.com/netbirdio/netbird/util/semaphore-group"
-
 	"github.com/netbirdio/netbird/client/system"
 	nbdns "github.com/netbirdio/netbird/dns"
 	"github.com/netbirdio/netbird/route"
 	mgm "github.com/netbirdio/netbird/shared/management/client"
+	"github.com/netbirdio/netbird/shared/management/domain"
 	mgmProto "github.com/netbirdio/netbird/shared/management/proto"
 	auth "github.com/netbirdio/netbird/shared/relay/auth/hmac"
 	relayClient "github.com/netbirdio/netbird/shared/relay/client"
@@ -75,13 +75,11 @@ import (
 const (
 	PeerConnectionTimeoutMax = 45000 // ms
 	PeerConnectionTimeoutMin = 30000 // ms
-	connInitLimit            = 200
 	disableAutoUpdate        = "disabled"
 )
 
 var ErrResetConnection = fmt.Errorf("reset connection")
 
-// EngineConfig is a config for the Engine
 type EngineConfig struct {
 	WgPort      int
 	WgIfaceName string
@@ -141,6 +139,17 @@ type EngineConfig struct {
 	ProfileConfig *profilemanager.Config
 
 	LogPath string
+}
+
+// EngineServices holds the external service dependencies required by the Engine.
+type EngineServices struct {
+	SignalClient   signal.Client
+	MgmClient      mgm.Client
+	RelayManager   *relayClient.Manager
+	StatusRecorder *peer.Status
+	Checks         []*mgmProto.Checks
+	StateManager   *statemanager.Manager
+	UpdateManager  *updater.Manager
 }
 
 // Engine is a mechanism responsible for reacting on Signal and Management stream events and managing connections to the remote peers.
@@ -209,11 +218,10 @@ type Engine struct {
 	syncRespMux         sync.RWMutex
 	persistSyncResponse bool
 	latestSyncResponse  *mgmProto.SyncResponse
-	connSemaphore       *semaphoregroup.SemaphoreGroup
 	flowManager         nftypes.FlowManager
 
 	// auto-update
-	updateManager *updatemanager.Manager
+	updateManager *updater.Manager
 
 	// WireGuard interface monitor
 	wgIfaceMonitor *WGIfaceMonitor
@@ -225,6 +233,8 @@ type Engine struct {
 
 	jobExecutor   *jobexec.Executor
 	jobExecutorWG sync.WaitGroup
+
+	exposeManager *expose.Manager
 }
 
 // Peer is an instance of the Connection Peer
@@ -241,22 +251,17 @@ type localIpUpdater interface {
 func NewEngine(
 	clientCtx context.Context,
 	clientCancel context.CancelFunc,
-	signalClient signal.Client,
-	mgmClient mgm.Client,
-	relayManager *relayClient.Manager,
 	config *EngineConfig,
+	services EngineServices,
 	mobileDep MobileDependency,
-	statusRecorder *peer.Status,
-	checks []*mgmProto.Checks,
-	stateManager *statemanager.Manager,
 ) *Engine {
 	engine := &Engine{
 		clientCtx:          clientCtx,
 		clientCancel:       clientCancel,
-		signal:             signalClient,
-		signaler:           peer.NewSignaler(signalClient, config.WgPrivateKey),
-		mgmClient:          mgmClient,
-		relayManager:       relayManager,
+		signal:             services.SignalClient,
+		signaler:           peer.NewSignaler(services.SignalClient, config.WgPrivateKey),
+		mgmClient:          services.MgmClient,
+		relayManager:       services.RelayManager,
 		peerStore:          peerstore.NewConnStore(),
 		syncMsgMux:         &sync.Mutex{},
 		config:             config,
@@ -264,13 +269,12 @@ func NewEngine(
 		STUNs:              []*stun.URI{},
 		TURNs:              []*stun.URI{},
 		networkSerial:      0,
-		statusRecorder:     statusRecorder,
-		stateManager:       stateManager,
-		portForwardManager: portforward.NewManager(stateManager),
-		checks:             checks,
-		connSemaphore:      semaphoregroup.NewSemaphoreGroup(connInitLimit),
+		statusRecorder:     services.StatusRecorder,
+		stateManager:       services.StateManager,
+		portForwardManager: portforward.NewManager(),
+		checks:             services.Checks,
 		probeStunTurn:      relay.NewStunTurnProbe(relay.DefaultCacheTTL),
-		jobExecutor:        jobexec.NewExecutor(),
+		jobExecutor:        jobexec.NewExecutor(), updateManager: services.UpdateManager,
 	}
 
 	log.Infof("I am: %s", config.WgPrivateKey.PublicKey().String())
@@ -313,7 +317,7 @@ func (e *Engine) Stop() error {
 	}
 
 	if e.updateManager != nil {
-		e.updateManager.Stop()
+		e.updateManager.SetDownloadOnly()
 	}
 
 	log.Info("cleaning up status recorder states")
@@ -421,6 +425,7 @@ func (e *Engine) Start(netbirdConfig *mgmProto.NetbirdConfig, mgmtURL *url.URL) 
 		e.cancel()
 	}
 	e.ctx, e.cancel = context.WithCancel(e.clientCtx)
+	e.exposeManager = expose.NewManager(e.ctx, e.mgmClient)
 
 	wgIface, err := e.newWgIface()
 	if err != nil {
@@ -513,7 +518,11 @@ func (e *Engine) Start(netbirdConfig *mgmProto.NetbirdConfig, mgmtURL *url.URL) 
 	e.setupWGProxyNoTrack()
 
 	// Start after interface is up since port may have been resolved from 0 or changed if occupied
-	e.portForwardManager.Start(e.ctx, uint16(e.config.WgPort))
+	e.shutdownWg.Add(1)
+	go func() {
+		defer e.shutdownWg.Done()
+		e.portForwardManager.Start(e.ctx, uint16(e.config.WgPort))
+	}()
 
 	// Set the WireGuard interface for rosenpass after interface is up
 	if e.rpManager != nil {
@@ -549,11 +558,12 @@ func (e *Engine) Start(netbirdConfig *mgmProto.NetbirdConfig, mgmtURL *url.URL) 
 	// monitor WireGuard interface lifecycle and restart engine on changes
 	e.wgIfaceMonitor = NewWGIfaceMonitor()
 	e.shutdownWg.Add(1)
+	wgIfaceName := e.wgInterface.Name()
 
 	go func() {
 		defer e.shutdownWg.Done()
 
-		if shouldRestart, err := e.wgIfaceMonitor.Start(e.ctx, e.wgInterface.Name()); shouldRestart {
+		if shouldRestart, err := e.wgIfaceMonitor.Start(e.ctx, wgIfaceName); shouldRestart {
 			log.Infof("WireGuard interface monitor: %s, restarting engine", err)
 			e.triggerClientRestart()
 		} else if err != nil {
@@ -564,13 +574,6 @@ func (e *Engine) Start(netbirdConfig *mgmProto.NetbirdConfig, mgmtURL *url.URL) 
 	return nil
 }
 
-func (e *Engine) InitialUpdateHandling(autoUpdateSettings *mgmProto.AutoUpdateSettings) {
-	e.syncMsgMux.Lock()
-	defer e.syncMsgMux.Unlock()
-
-	e.handleAutoUpdateVersion(autoUpdateSettings, true)
-}
-
 func (e *Engine) createFirewall() error {
 	if e.config.DisableFirewall {
 		log.Infof("firewall is disabled")
@@ -579,9 +582,11 @@ func (e *Engine) createFirewall() error {
 
 	var err error
 	e.firewall, err = firewall.NewFirewall(e.wgInterface, e.stateManager, e.flowManager.GetLogger(), e.config.DisableServerRoutes, e.config.MTU)
-	if err != nil || e.firewall == nil {
-		log.Errorf("failed creating firewall manager: %s", err)
-		return nil
+	if err != nil {
+		return fmt.Errorf("create firewall manager: %w", err)
+	}
+	if e.firewall == nil {
+		return fmt.Errorf("create firewall manager: received nil manager")
 	}
 
 	if err := e.initFirewall(); err != nil {
@@ -796,42 +801,29 @@ func (e *Engine) PopulateNetbirdConfig(netbirdConfig *mgmProto.NetbirdConfig, mg
 	return nil
 }
 
-func (e *Engine) handleAutoUpdateVersion(autoUpdateSettings *mgmProto.AutoUpdateSettings, initialCheck bool) {
+func (e *Engine) handleAutoUpdateVersion(autoUpdateSettings *mgmProto.AutoUpdateSettings) {
+	if e.updateManager == nil {
+		return
+	}
+
 	if autoUpdateSettings == nil {
 		return
 	}
 
-	disabled := autoUpdateSettings.Version == disableAutoUpdate
-
-	// Stop and cleanup if disabled
-	if e.updateManager != nil && disabled {
-		log.Infof("auto-update is disabled, stopping update manager")
-		e.updateManager.Stop()
-		e.updateManager = nil
+	if autoUpdateSettings.Version == disableAutoUpdate {
+		log.Infof("auto-update is disabled")
+		e.updateManager.SetDownloadOnly()
 		return
 	}
 
-	// Skip check unless AlwaysUpdate is enabled or this is the initial check at startup
-	if !autoUpdateSettings.AlwaysUpdate && !initialCheck {
-		log.Debugf("skipping auto-update check, AlwaysUpdate is false and this is not the initial check")
-		return
-	}
-
-	// Start manager if needed
-	if e.updateManager == nil {
-		log.Infof("starting auto-update manager")
-		updateManager, err := updatemanager.NewManager(e.statusRecorder, e.stateManager)
-		if err != nil {
-			return
-		}
-		e.updateManager = updateManager
-		e.updateManager.Start(e.ctx)
-	}
-	log.Infof("handling auto-update version: %s", autoUpdateSettings.Version)
-	e.updateManager.SetVersion(autoUpdateSettings.Version)
+	e.updateManager.SetVersion(autoUpdateSettings.Version, autoUpdateSettings.AlwaysUpdate)
 }
 
 func (e *Engine) handleSync(update *mgmProto.SyncResponse) error {
+	started := time.Now()
+	defer func() {
+		log.Infof("sync finished in %s", time.Since(started))
+	}()
 	e.syncMsgMux.Lock()
 	defer e.syncMsgMux.Unlock()
 
@@ -841,7 +833,7 @@ func (e *Engine) handleSync(update *mgmProto.SyncResponse) error {
 	}
 
 	if update.NetworkMap != nil && update.NetworkMap.PeerConfig != nil {
-		e.handleAutoUpdateVersion(update.NetworkMap.PeerConfig.AutoUpdate, false)
+		e.handleAutoUpdateVersion(update.NetworkMap.PeerConfig.AutoUpdate)
 	}
 
 	if update.GetNetbirdConfig() != nil {
@@ -1021,7 +1013,7 @@ func (e *Engine) updateConfig(conf *mgmProto.PeerConfig) error {
 	state := e.statusRecorder.GetLocalPeerState()
 	state.IP = e.wgInterface.Address().String()
 	state.PubKey = e.config.WgPrivateKey.PublicKey().String()
-	state.KernelInterface = device.WireGuardModuleIsLoaded()
+	state.KernelInterface = !e.wgInterface.IsUserspaceBind()
 	state.FQDN = conf.GetFqdn()
 
 	e.statusRecorder.UpdateLocalPeerState(state)
@@ -1314,8 +1306,7 @@ func (e *Engine) updateNetworkMap(networkMap *mgmProto.NetworkMap) error {
 
 	// Test received (upstream) servers for availability right away instead of upon usage.
 	// If no server of a server group responds this will disable the respective handler and retry later.
-	e.dnsServer.ProbeAvailability()
-
+	go e.dnsServer.ProbeAvailability()
 	return nil
 }
 
@@ -1537,7 +1528,6 @@ func (e *Engine) createPeerConn(pubKey string, allowedIPs []netip.Prefix, agentV
 		IFaceDiscover:      e.mobileDep.IFaceDiscover,
 		RelayManager:       e.relayManager,
 		SrWatcher:          e.srWatcher,
-		Semaphore:          e.connSemaphore,
 		PortForwardManager: e.portForwardManager,
 	}
 	peerConn, err := peer.NewConn(config, serviceDependencies)
@@ -1561,8 +1551,10 @@ func (e *Engine) receiveSignalEvents() {
 		defer e.shutdownWg.Done()
 		// connect to a stream of messages coming from the signal server
 		err := e.signal.Receive(e.ctx, func(msg *sProto.Message) error {
+			start := time.Now()
 			e.syncMsgMux.Lock()
 			defer e.syncMsgMux.Unlock()
+			gotLock := time.Since(start)
 
 			// Check context INSIDE lock to ensure atomicity with shutdown
 			if e.ctx.Err() != nil {
@@ -1585,6 +1577,8 @@ func (e *Engine) receiveSignalEvents() {
 				if err != nil {
 					return err
 				}
+
+				log.Debugf("receiveMSG: took %s to get lock for peer %s with session id %s", gotLock, msg.Key, offerAnswer.SessionID)
 
 				if msg.Body.Type == sProto.Body_OFFER {
 					conn.OnRemoteOffer(*offerAnswer)
@@ -1692,7 +1686,11 @@ func (e *Engine) close() {
 		_ = e.rpManager.Close()
 	}
 
-	e.portForwardManager.Stop()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := e.portForwardManager.GracefullyStop(ctx); err != nil {
+		log.Warnf("failed to gracefully stop port forwarding manager: %s", err)
+	}
 }
 
 func (e *Engine) readInitialSettings() ([]*route.Route, *nbdns.Config, bool, error) {
@@ -1821,9 +1819,16 @@ func (e *Engine) GetRouteManager() routemanager.Manager {
 	return e.routeManager
 }
 
-// GetFirewallManager returns the firewall manager
+// GetFirewallManager returns the firewall manager.
 func (e *Engine) GetFirewallManager() firewallManager.Manager {
 	return e.firewall
+}
+
+// GetExposeManager returns the expose session manager.
+func (e *Engine) GetExposeManager() *expose.Manager {
+	e.syncMsgMux.Lock()
+	defer e.syncMsgMux.Unlock()
+	return e.exposeManager
 }
 
 func findIPFromInterfaceName(ifaceName string) (net.IP, error) {
@@ -1925,7 +1930,7 @@ func (e *Engine) triggerClientRestart() {
 }
 
 func (e *Engine) startNetworkMonitor() {
-	if !e.config.NetworkMonitor {
+	if !e.config.NetworkMonitor || nbnetstack.IsEnabled() {
 		log.Infof("Network monitor is disabled, not starting")
 		return
 	}

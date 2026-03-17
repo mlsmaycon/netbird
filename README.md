@@ -60,8 +60,8 @@
 
 https://github.com/user-attachments/assets/10cec749-bb56-4ab3-97af-4e38850108d2
 
-### NetBird on Lawrence Systems (Video)
-[![Watch the video](https://img.youtube.com/vi/Kwrff6h0rEw/0.jpg)](https://www.youtube.com/watch?v=Kwrff6h0rEw)
+### Self-Host NetBird (Video)
+[![Watch the video](https://img.youtube.com/vi/bZAgpT6nzaQ/0.jpg)](https://youtu.be/bZAgpT6nzaQ)
 
 ### Key features
 
@@ -126,6 +126,7 @@ See a complete [architecture overview](https://docs.netbird.io/about-netbird/how
 ### Community projects
 -  [NetBird installer script](https://github.com/physk/netbird-installer)
 -  [NetBird ansible collection by Dominion Solutions](https://galaxy.ansible.com/ui/repo/published/dominion_solutions/netbird/)
+-  [netbird-tui](https://github.com/n0pashkov/netbird-tui) — terminal UI for managing NetBird peers, routes, and settings
 
 **Note**: The `main` branch may be in an *unstable or even broken state* during development.
 For stable versions, see [releases](https://github.com/netbirdio/netbird/releases).

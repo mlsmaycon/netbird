@@ -20,14 +20,15 @@ import (
 
 	"github.com/netbirdio/netbird/client/iface"
 	"github.com/netbirdio/netbird/client/iface/device"
+	"github.com/netbirdio/netbird/client/iface/netstack"
 	"github.com/netbirdio/netbird/client/internal/dns"
 	"github.com/netbirdio/netbird/client/internal/listener"
 	"github.com/netbirdio/netbird/client/internal/peer"
 	"github.com/netbirdio/netbird/client/internal/profilemanager"
 	"github.com/netbirdio/netbird/client/internal/statemanager"
 	"github.com/netbirdio/netbird/client/internal/stdnet"
-	"github.com/netbirdio/netbird/client/internal/updatemanager"
-	"github.com/netbirdio/netbird/client/internal/updatemanager/installer"
+	"github.com/netbirdio/netbird/client/internal/updater"
+	"github.com/netbirdio/netbird/client/internal/updater/installer"
 	nbnet "github.com/netbirdio/netbird/client/net"
 	cProto "github.com/netbirdio/netbird/client/proto"
 	"github.com/netbirdio/netbird/client/ssh"
@@ -43,13 +44,13 @@ import (
 )
 
 type ConnectClient struct {
-	ctx                 context.Context
-	config              *profilemanager.Config
-	statusRecorder      *peer.Status
-	doInitialAutoUpdate bool
+	ctx            context.Context
+	config         *profilemanager.Config
+	statusRecorder *peer.Status
 
-	engine      *Engine
-	engineMutex sync.Mutex
+	engine        *Engine
+	engineMutex   sync.Mutex
+	updateManager *updater.Manager
 
 	persistSyncResponse bool
 }
@@ -58,15 +59,17 @@ func NewConnectClient(
 	ctx context.Context,
 	config *profilemanager.Config,
 	statusRecorder *peer.Status,
-	doInitalAutoUpdate bool,
 ) *ConnectClient {
 	return &ConnectClient{
-		ctx:                 ctx,
-		config:              config,
-		statusRecorder:      statusRecorder,
-		doInitialAutoUpdate: doInitalAutoUpdate,
-		engineMutex:         sync.Mutex{},
+		ctx:            ctx,
+		config:         config,
+		statusRecorder: statusRecorder,
+		engineMutex:    sync.Mutex{},
 	}
+}
+
+func (c *ConnectClient) SetUpdateManager(um *updater.Manager) {
+	c.updateManager = um
 }
 
 // Run with main logic.
@@ -186,14 +189,13 @@ func (c *ConnectClient) run(mobileDependency MobileDependency, runningChan chan 
 	stateManager := statemanager.New(path)
 	stateManager.RegisterState(&sshconfig.ShutdownState{})
 
-	updateManager, err := updatemanager.NewManager(c.statusRecorder, stateManager)
-	if err == nil {
-		updateManager.CheckUpdateSuccess(c.ctx)
+	if c.updateManager != nil {
+		c.updateManager.CheckUpdateSuccess(c.ctx)
+	}
 
-		inst := installer.New()
-		if err := inst.CleanUpInstallerFiles(); err != nil {
-			log.Errorf("failed to clean up temporary installer file: %v", err)
-		}
+	inst := installer.New()
+	if err := inst.CleanUpInstallerFiles(); err != nil {
+		log.Errorf("failed to clean up temporary installer file: %v", err)
 	}
 
 	defer c.statusRecorder.ClientStop()
@@ -244,7 +246,7 @@ func (c *ConnectClient) run(mobileDependency MobileDependency, runningChan chan 
 		localPeerState := peer.LocalPeerState{
 			IP:              loginResp.GetPeerConfig().GetAddress(),
 			PubKey:          myPrivateKey.PublicKey().String(),
-			KernelInterface: device.WireGuardModuleIsLoaded(),
+			KernelInterface: device.WireGuardModuleIsLoaded() && !netstack.IsEnabled(),
 			FQDN:            loginResp.GetPeerConfig().GetFqdn(),
 		}
 		c.statusRecorder.UpdateLocalPeerState(localPeerState)
@@ -307,7 +309,15 @@ func (c *ConnectClient) run(mobileDependency MobileDependency, runningChan chan 
 		checks := loginResp.GetChecks()
 
 		c.engineMutex.Lock()
-		engine := NewEngine(engineCtx, cancel, signalClient, mgmClient, relayManager, engineConfig, mobileDependency, c.statusRecorder, checks, stateManager)
+		engine := NewEngine(engineCtx, cancel, engineConfig, EngineServices{
+			SignalClient:   signalClient,
+			MgmClient:      mgmClient,
+			RelayManager:   relayManager,
+			StatusRecorder: c.statusRecorder,
+			Checks:         checks,
+			StateManager:   stateManager,
+			UpdateManager:  c.updateManager,
+		}, mobileDependency)
 		engine.SetSyncResponsePersistence(c.persistSyncResponse)
 		c.engine = engine
 		c.engineMutex.Unlock()
@@ -317,21 +327,15 @@ func (c *ConnectClient) run(mobileDependency MobileDependency, runningChan chan 
 			return wrapErr(err)
 		}
 
-		if loginResp.PeerConfig != nil && loginResp.PeerConfig.AutoUpdate != nil {
-			// AutoUpdate will be true when the user click on "Connect" menu on the UI
-			if c.doInitialAutoUpdate {
-				log.Infof("start engine by ui, run auto-update check")
-				c.engine.InitialUpdateHandling(loginResp.PeerConfig.AutoUpdate)
-				c.doInitialAutoUpdate = false
-			}
-		}
-
 		log.Infof("Netbird engine started, the IP is: %s", peerConfig.GetAddress())
 		state.Set(StatusConnected)
 
 		if runningChan != nil {
-			close(runningChan)
-			runningChan = nil
+			select {
+			case <-runningChan:
+			default:
+				close(runningChan)
+			}
 		}
 
 		<-engineCtx.Done()
