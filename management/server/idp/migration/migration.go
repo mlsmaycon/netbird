@@ -1,5 +1,5 @@
-// Package migration provides utility functions for migrating from the external IdP solution in pre v0.60.0
-// to the new embedded IdP manager (Dex based), which is the default in v0.60.0 and later.
+// Package migration provides utility functions for migrating from the external IdP solution in pre v0.62.0
+// to the new embedded IdP manager (Dex based), which is the default in v0.62.0 and later.
 // It includes functions to seed connectors and migrate existing users to use these connectors.
 package migration
 

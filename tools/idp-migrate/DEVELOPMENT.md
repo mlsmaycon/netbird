@@ -2,7 +2,7 @@
 
 ## Overview
 
-This tool migrates NetBird deployments from an external IdP (Auth0, Zitadel, Okta, etc.) to the embedded Dex IdP introduced in v0.60.0. It does two things:
+This tool migrates NetBird deployments from an external IdP (Auth0, Zitadel, Okta, etc.) to the embedded Dex IdP introduced in v0.62.0. It does two things:
 
 1. **DB migration** — Re-encodes every user ID from `{original_id}` to Dex's protobuf-encoded format `base64(proto{original_id, connector_id})`.
 2. **Config generation** — Transforms `management.json` by replacing `IdpManagerConfig` with `EmbeddedIdP` and updating `HttpConfig` fields.
@@ -57,7 +57,7 @@ The build requires `CGO_ENABLED=1` because it links the SQLite driver used by `S
 
 ### Phase 0: Schema Validation
 
-`validateSchema()` opens the store and calls `CheckSchema(RequiredSchema)` to verify that all tables and columns required by the migration exist in the database. If anything is missing, the tool exits with a descriptive error instructing the operator to start the management server (v0.60.0+) at least once so that automatic GORM migrations create the required schema.
+`validateSchema()` opens the store and calls `CheckSchema(RequiredSchema)` to verify that all tables and columns required by the migration exist in the database. If anything is missing, the tool exits with a descriptive error instructing the operator to start the management server (v0.62.0+) at least once so that automatic GORM migrations create the required schema.
 
 ### Phase 1: Populate User Info
 

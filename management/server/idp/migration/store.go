@@ -62,9 +62,20 @@ type Store interface {
 	CheckSchema(checks []SchemaCheck) []SchemaError
 }
 
+// RequiredEventSchema lists all tables and columns that the migration tool needs
+// in the activity/event store.
+var RequiredEventSchema = []SchemaCheck{
+	{Table: "events", Columns: []string{"initiator_id", "target_id"}},
+	{Table: "deleted_users", Columns: []string{"id"}},
+}
+
 // EventStore defines the activity event store operations required for migration.
 // Like Store, this is a temporary interface for migration tooling only.
 type EventStore interface {
+	// CheckSchema verifies that all tables and columns required by the migration
+	// exist in the event database. Returns a list of problems; an empty slice means OK.
+	CheckSchema(checks []SchemaCheck) []SchemaError
+
 	// UpdateUserID updates all event references (initiator_id, target_id) and
 	// deleted_users records to use the new user ID format.
 	UpdateUserID(ctx context.Context, oldUserID, newUserID string) error

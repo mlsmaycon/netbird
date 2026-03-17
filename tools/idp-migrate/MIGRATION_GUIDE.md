@@ -1,6 +1,6 @@
 # Migrating from External IdP to Embedded IdP
 
-This guide walks through migrating a self-hosted NetBird deployment from an external identity provider to the embedded Dex-based IdP introduced in v0.60.0.
+This guide walks through migrating a self-hosted NetBird deployment from an external identity provider to the embedded Dex-based IdP introduced in v0.62.0.
 
 ## Overview
 
@@ -419,7 +419,7 @@ Migrate user IDs in the database but skip config generation:
 
 ### "store does not support migration operations"
 
-The store implementation is missing the required `ListUsers`/`UpdateUserID` methods. Upgrade to v0.60.0+ binaries.
+The store implementation is missing the required `ListUsers`/`UpdateUserID` methods. Upgrade to v0.66.4+ binaries.
 
 ### "could not determine domain"
 

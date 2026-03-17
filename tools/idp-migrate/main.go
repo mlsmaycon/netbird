@@ -1,5 +1,5 @@
 // Package main provides a standalone CLI tool to migrate user IDs from an
-// external IdP format to the embedded Dex IdP format used by NetBird >= v0.60.0.
+// external IdP format to the embedded Dex IdP format used by NetBird >= v0.62.0.
 //
 // This tool reads management.json to auto-detect the current external IdP
 // configuration (issuer, clientID, clientSecret, type) and re-encodes all user
@@ -138,7 +138,7 @@ func run(configPath, dataDirOverride, idpSeedInfo string, dryRun, force, skipCon
 // to upgrade their management server.
 func validateSchema(cfg *nbconfig.Config, dataDir string) error {
 	ctx := context.Background()
-	migStore, _, cleanup, err := openStores(ctx, cfg, dataDir)
+	migStore, migEventStore, cleanup, err := openStores(ctx, cfg, dataDir)
 	if err != nil {
 		return err
 	}
@@ -147,6 +147,13 @@ func validateSchema(cfg *nbconfig.Config, dataDir string) error {
 	errs := migStore.CheckSchema(migration.RequiredSchema)
 	if len(errs) > 0 {
 		return fmt.Errorf("%s", formatSchemaErrors(errs))
+	}
+
+	if migEventStore != nil {
+		eventErrs := migEventStore.CheckSchema(migration.RequiredEventSchema)
+		if len(eventErrs) > 0 {
+			return fmt.Errorf("activity store schema check failed (upgrade management server first):\n%s", formatSchemaErrors(eventErrs))
+		}
 	}
 
 	log.Info("database schema check passed")
@@ -161,7 +168,7 @@ func formatSchemaErrors(errs []migration.SchemaError) string {
 	for _, e := range errs {
 		b.WriteString(fmt.Sprintf("  - %s\n", e.String()))
 	}
-	b.WriteString("\nPlease start the NetBird management server (v0.60.0+) at least once so that automatic database migrations create the required schema, then re-run this tool.\n")
+	b.WriteString("\nPlease start the NetBird management server (v0.66.4+) at least once so that automatic database migrations create the required schema, then re-run this tool.\n")
 	return b.String()
 }
 
@@ -516,19 +523,13 @@ func generateConfig(configPath string, conn *dex.Connector, cfg *nbconfig.Config
 	}
 	connConfig["redirectURI"] = fmt.Sprintf("https://%s/oauth2/callback", domain)
 
-	// Add EmbeddedIdP section
+	// Add minimal EmbeddedIdP section
 	configMap["EmbeddedIdP"] = map[string]interface{}{
-		"Enabled":               true,
-		"Issuer":                fmt.Sprintf("https://%s/oauth2", domain),
-		"SignKeyRefreshEnabled": true,
-		"LocalAuthDisabled":     true,
+		"Enabled": true,
+		"Issuer":  fmt.Sprintf("https://%s/oauth2", domain),
 		"DashboardRedirectURIs": []string{
 			fmt.Sprintf("https://%s/nb-auth", domain),
 			fmt.Sprintf("https://%s/nb-silent-auth", domain),
-		},
-		"CLIRedirectURIs": []string{
-			"http://localhost:53000/",
-			"http://localhost:54000/",
 		},
 		"StaticConnectors": []interface{}{
 			map[string]interface{}{
@@ -537,40 +538,6 @@ func generateConfig(configPath string, conn *dex.Connector, cfg *nbconfig.Config
 				"id":     conn.ID,
 				"config": connConfig,
 			},
-		},
-	}
-
-	// Update HttpConfig fields
-	httpConfig, _ := configMap["HttpConfig"].(map[string]interface{})
-	if httpConfig == nil {
-		httpConfig = map[string]interface{}{}
-		configMap["HttpConfig"] = httpConfig
-	}
-	httpConfig["AuthIssuer"] = fmt.Sprintf("https://%s/oauth2", domain)
-	httpConfig["AuthAudience"] = "netbird-dashboard"
-	httpConfig["AuthClientID"] = "netbird-dashboard"
-	httpConfig["CLIAuthAudience"] = "netbird-cli"
-	httpConfig["AuthKeysLocation"] = fmt.Sprintf("https://%s/oauth2/keys", domain)
-	httpConfig["OIDCConfigEndpoint"] = fmt.Sprintf("https://%s/oauth2/.well-known/openid-configuration", domain)
-	httpConfig["AuthUserIDClaim"] = "sub"
-	httpConfig["IdpSignKeyRefreshEnabled"] = true
-
-	// Update PKCEAuthorizationFlow to use Dex endpoints
-	dexIssuer := fmt.Sprintf("https://%s/oauth2", domain)
-	configMap["PKCEAuthorizationFlow"] = map[string]interface{}{
-		"ProviderConfig": map[string]interface{}{
-			"Audience":              "netbird-cli",
-			"ClientID":              "netbird-cli",
-			"ClientSecret":          "",
-			"Scope":                 "openid profile email offline_access",
-			"AuthorizationEndpoint": dexIssuer + "/auth",
-			"TokenEndpoint":         dexIssuer + "/token",
-			"DeviceAuthEndpoint":    dexIssuer + "/device/code",
-			"RedirectURLs": []string{
-				"http://localhost:53000/",
-				"http://localhost:54000/",
-			},
-			"UseIDToken": false,
 		},
 	}
 

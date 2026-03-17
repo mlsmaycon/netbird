@@ -344,7 +344,7 @@ func TestLoadConfig(t *testing.T) {
 
 		configJSON := `{
 			"Datadir": "/var/lib/netbird",
-			"DataStoreEncryptionKey": "test-key-1234567890123456",
+			"DataStoreEncryptionKey": "example-encryption-key-0000",
 			"StoreConfig": {
 				"Engine": "sqlite"
 			},
@@ -362,7 +362,7 @@ func TestLoadConfig(t *testing.T) {
 		cfg, err := loadConfig(configPath)
 		require.NoError(t, err)
 		assert.Equal(t, "/var/lib/netbird", cfg.Datadir)
-		assert.Equal(t, "test-key-1234567890123456", cfg.DataStoreEncryptionKey)
+		assert.Equal(t, "example-encryption-key-0000", cfg.DataStoreEncryptionKey)
 		require.NotNil(t, cfg.IdpManagerConfig)
 		assert.Equal(t, "zitadel", cfg.IdpManagerConfig.ManagerType)
 		assert.Equal(t, "test-client", cfg.IdpManagerConfig.ClientConfig.ClientID)
@@ -532,36 +532,18 @@ func TestGenerateConfig(t *testing.T) {
 		_, hasOldIdp := result["IdpManagerConfig"]
 		assert.False(t, hasOldIdp, "IdpManagerConfig should be removed")
 
-		// EmbeddedIdP should be present
+		// EmbeddedIdP should be present with minimal fields
 		embeddedIdP, ok := result["EmbeddedIdP"].(map[string]interface{})
 		require.True(t, ok, "EmbeddedIdP should be present")
 		assert.Equal(t, true, embeddedIdP["Enabled"])
 		assert.Equal(t, "https://mgmt.example.com/oauth2", embeddedIdP["Issuer"])
-		assert.Equal(t, true, embeddedIdP["LocalAuthDisabled"])
-		assert.Equal(t, true, embeddedIdP["SignKeyRefreshEnabled"])
+		assert.Nil(t, embeddedIdP["LocalAuthDisabled"], "LocalAuthDisabled should not be set")
+		assert.Nil(t, embeddedIdP["SignKeyRefreshEnabled"], "SignKeyRefreshEnabled should not be set")
+		assert.Nil(t, embeddedIdP["CLIRedirectURIs"], "CLIRedirectURIs should not be set")
 
-		// HttpConfig should be updated
-		httpConfig, ok := result["HttpConfig"].(map[string]interface{})
-		require.True(t, ok)
-		assert.Equal(t, "https://mgmt.example.com/oauth2", httpConfig["AuthIssuer"])
-		assert.Equal(t, "netbird-dashboard", httpConfig["AuthAudience"])
-		assert.Equal(t, "netbird-dashboard", httpConfig["AuthClientID"])
-		assert.Equal(t, "netbird-cli", httpConfig["CLIAuthAudience"])
-		assert.Equal(t, "https://mgmt.example.com/oauth2/keys", httpConfig["AuthKeysLocation"])
-		assert.Equal(t, "https://mgmt.example.com/oauth2/.well-known/openid-configuration", httpConfig["OIDCConfigEndpoint"])
-		assert.Equal(t, "sub", httpConfig["AuthUserIDClaim"])
-		assert.Equal(t, true, httpConfig["IdpSignKeyRefreshEnabled"])
-
-		// PKCEAuthorizationFlow should be updated to Dex endpoints
-		pkce, ok := result["PKCEAuthorizationFlow"].(map[string]interface{})
-		require.True(t, ok, "PKCEAuthorizationFlow should be present")
-		providerCfg, ok := pkce["ProviderConfig"].(map[string]interface{})
-		require.True(t, ok)
-		assert.Equal(t, "netbird-cli", providerCfg["Audience"])
-		assert.Equal(t, "netbird-cli", providerCfg["ClientID"])
-		assert.Equal(t, "https://mgmt.example.com/oauth2/auth", providerCfg["AuthorizationEndpoint"])
-		assert.Equal(t, "https://mgmt.example.com/oauth2/token", providerCfg["TokenEndpoint"])
-		assert.Equal(t, "https://mgmt.example.com/oauth2/device/code", providerCfg["DeviceAuthEndpoint"])
+		// HttpConfig should not be modified
+		_, hasPKCE := result["PKCEAuthorizationFlow"]
+		assert.False(t, hasPKCE, "PKCEAuthorizationFlow should not be added")
 
 		// Static connector's redirectURI should use the management domain
 		connectors := embeddedIdP["StaticConnectors"].([]interface{})
@@ -575,36 +557,6 @@ func TestGenerateConfig(t *testing.T) {
 		assert.Equal(t, "/var/lib/netbird", result["Datadir"])
 	})
 
-	t.Run("sets AuthUserIDClaim to sub", func(t *testing.T) {
-		dir := t.TempDir()
-		configPath := filepath.Join(dir, "management.json")
-
-		originalConfig := `{
-  "HttpConfig": {
-    "LetsEncryptDomain": "mgmt.example.com"
-  }
-}`
-		require.NoError(t, os.WriteFile(configPath, []byte(originalConfig), 0600))
-
-		cfg := &nbconfig.Config{
-			HttpConfig: &nbconfig.HttpServerConfig{
-				LetsEncryptDomain: "mgmt.example.com",
-			},
-		}
-		conn := &dex.Connector{Type: "oidc", Name: "test", ID: "test"}
-
-		err := generateConfig(configPath, conn, cfg, false)
-		require.NoError(t, err)
-
-		newData, err := os.ReadFile(configPath)
-		require.NoError(t, err)
-
-		var result map[string]interface{}
-		require.NoError(t, json.Unmarshal(newData, &result))
-
-		httpConfig := result["HttpConfig"].(map[string]interface{})
-		assert.Equal(t, "sub", httpConfig["AuthUserIDClaim"])
-	})
 
 	t.Run("dry run does not write files", func(t *testing.T) {
 		dir := t.TempDir()

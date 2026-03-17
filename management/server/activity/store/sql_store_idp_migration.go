@@ -11,7 +11,28 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/netbirdio/netbird/management/server/activity"
+	"github.com/netbirdio/netbird/management/server/idp/migration"
 )
+
+// CheckSchema verifies that all tables and columns required by the migration exist in the event database.
+func (store *Store) CheckSchema(checks []migration.SchemaCheck) []migration.SchemaError {
+	migrator := store.db.Migrator()
+	var errs []migration.SchemaError
+
+	for _, check := range checks {
+		if !migrator.HasTable(check.Table) {
+			errs = append(errs, migration.SchemaError{Table: check.Table})
+			continue
+		}
+		for _, col := range check.Columns {
+			if !migrator.HasColumn(check.Table, col) {
+				errs = append(errs, migration.SchemaError{Table: check.Table, Column: col})
+			}
+		}
+	}
+
+	return errs
+}
 
 // UpdateUserID updates all references to oldUserID in events and deleted_users tables.
 func (store *Store) UpdateUserID(ctx context.Context, oldUserID, newUserID string) error {
