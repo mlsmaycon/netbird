@@ -26,8 +26,9 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/netbirdio/netbird/idp/dex"
-	activitystore "github.com/netbirdio/netbird/management/server/activity/store"
 	nbconfig "github.com/netbirdio/netbird/management/internals/server/config"
+	activitystore "github.com/netbirdio/netbird/management/server/activity/store"
+	"github.com/netbirdio/netbird/management/server/idp"
 	"github.com/netbirdio/netbird/management/server/idp/migration"
 	"github.com/netbirdio/netbird/management/server/store"
 	"github.com/netbirdio/netbird/management/server/types"
@@ -41,18 +42,19 @@ type migrationServer struct {
 	eventStore migration.MigrationEventStore
 }
 
-func (s *migrationServer) Store() migration.MigrationStore        { return s.store }
+func (s *migrationServer) Store() migration.MigrationStore           { return s.store }
 func (s *migrationServer) EventStore() migration.MigrationEventStore { return s.eventStore }
 
 func main() {
 	var (
-		configPath  string
-		dataDir     string
-		idpSeedInfo string
-		dryRun      bool
-		force       bool
-		skipConfig  bool
-		logLevel    string
+		configPath           string
+		dataDir              string
+		idpSeedInfo          string
+		dryRun               bool
+		force                bool
+		skipConfig           bool
+		skipPopulateUserInfo bool
+		logLevel             string
 	)
 
 	flag.StringVar(&configPath, "config", "", "path to management.json (required)")
@@ -61,6 +63,7 @@ func main() {
 	flag.BoolVar(&dryRun, "dry-run", false, "preview changes without writing")
 	flag.BoolVar(&force, "force", false, "skip confirmation prompt")
 	flag.BoolVar(&skipConfig, "skip-config", false, "skip config generation (DB migration only)")
+	flag.BoolVar(&skipPopulateUserInfo, "skip-populate-user-info", false, "skip populating user info (user id migration only)")
 	flag.StringVar(&logLevel, "log-level", "info", "log level (debug, info, warn, error)")
 	flag.Parse()
 
@@ -69,12 +72,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := run(configPath, dataDir, idpSeedInfo, dryRun, force, skipConfig); err != nil {
+	if err := run(configPath, dataDir, idpSeedInfo, dryRun, force, skipConfig, skipPopulateUserInfo); err != nil {
 		log.Fatalf("migration failed: %v", err)
 	}
 }
 
-func run(configPath, dataDirOverride, idpSeedInfo string, dryRun, force, skipConfig bool) error {
+func run(configPath, dataDirOverride, idpSeedInfo string, dryRun, force, skipConfig, skipPopulateUserInfo bool) error {
 	if configPath == "" {
 		return fmt.Errorf("--config is required")
 	}
@@ -90,6 +93,13 @@ func run(configPath, dataDirOverride, idpSeedInfo string, dryRun, force, skipCon
 	}
 	if effectiveDataDir == "" {
 		return fmt.Errorf("data directory not set: use --datadir or set Datadir in management.json")
+	}
+
+	if !skipPopulateUserInfo {
+		err := populateUserInfoFromIDP(cfg, effectiveDataDir, dryRun)
+		if err != nil {
+			return fmt.Errorf("populate user info: %w", err)
+		}
 	}
 
 	conn, err := resolveConnector(idpSeedInfo, cfg)
@@ -115,6 +125,36 @@ func run(configPath, dataDirOverride, idpSeedInfo string, dryRun, force, skipCon
 	}
 
 	return generateConfig(configPath, conn, cfg, dryRun)
+}
+
+// populateUserInfoFromIDP creates an IDP manager from the config, fetches all
+// user data (email, name) from the external IDP, and updates the store for users
+// that are missing this information.
+func populateUserInfoFromIDP(cfg *nbconfig.Config, dataDir string, dryRun bool) error {
+	ctx := context.Background()
+
+	if cfg.IdpManagerConfig == nil {
+		return fmt.Errorf("IdpManagerConfig is not set in management.json; cannot fetch user info from IDP")
+	}
+
+	idpManager, err := idp.NewManager(ctx, *cfg.IdpManagerConfig, nil)
+	if err != nil {
+		return fmt.Errorf("create IDP manager: %w", err)
+	}
+	if idpManager == nil {
+		return fmt.Errorf("IDP manager type is 'none' or empty; cannot fetch user info")
+	}
+
+	log.Infof("created IDP manager (type: %s)", cfg.IdpManagerConfig.ManagerType)
+
+	migStore, _, cleanup, err := openStores(ctx, cfg, dataDir)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	srv := &migrationServer{store: migStore}
+	return migration.PopulateUserInfo(srv, idpManager, dryRun)
 }
 
 // openStores opens the main and activity stores, returning migration-specific interfaces.
@@ -474,9 +514,9 @@ func generateConfig(configPath string, conn *dex.Connector, cfg *nbconfig.Config
 	configMap["PKCEAuthorizationFlow"] = map[string]interface{}{
 		"ProviderConfig": map[string]interface{}{
 			"Audience":              "netbird-cli",
-			"ClientID":             "netbird-cli",
-			"ClientSecret":         "",
-			"Scope":                "openid profile email offline_access",
+			"ClientID":              "netbird-cli",
+			"ClientSecret":          "",
+			"Scope":                 "openid profile email offline_access",
 			"AuthorizationEndpoint": dexIssuer + "/auth",
 			"TokenEndpoint":         dexIssuer + "/token",
 			"DeviceAuthEndpoint":    dexIssuer + "/device/code",

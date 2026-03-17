@@ -20,6 +20,9 @@ type MigrationStore interface {
 	// UpdateUserID atomically updates a user's ID and all foreign key references
 	// across the database (peers, groups, policies, PATs, etc.).
 	UpdateUserID(ctx context.Context, accountID, oldUserID, newUserID string) error
+
+	// UpdateUserInfo updates a user's email and name in the store.
+	UpdateUserInfo(ctx context.Context, userID, email, name string) error
 }
 
 // MigrationEventStore defines the activity event store operations required for migration.

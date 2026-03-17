@@ -47,6 +47,24 @@ func (s *SqlStore) txDeferFKConstraints(tx *gorm.DB) error {
 	}
 }
 
+func (s *SqlStore) UpdateUserInfo(ctx context.Context, userID, email, name string) error {
+	user := &types.User{Email: email, Name: name}
+	if err := user.EncryptSensitiveData(s.fieldEncrypt); err != nil {
+		return fmt.Errorf("encrypt user info: %w", err)
+	}
+
+	result := s.db.Model(&types.User{}).Where("id = ?", userID).Updates(map[string]interface{}{
+		"email": user.Email,
+		"name":  user.Name,
+	})
+	if result.Error != nil {
+		log.WithContext(ctx).Errorf("error updating user info for %s: %s", userID, result.Error)
+		return status.Errorf(status.Internal, "failed to update user info")
+	}
+
+	return nil
+}
+
 func (s *SqlStore) UpdateUserID(ctx context.Context, accountID, oldUserID, newUserID string) error {
 	type fkUpdate struct {
 		model  any

@@ -13,6 +13,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/netbirdio/netbird/idp/dex"
+	"github.com/netbirdio/netbird/management/server/idp"
 	"github.com/netbirdio/netbird/management/server/types"
 )
 
@@ -143,6 +144,95 @@ func migrateUser(ctx context.Context, s Server, oldID, accountID, newID string) 
 
 	if err := s.EventStore().UpdateUserID(ctx, oldID, newID); err != nil {
 		return fmt.Errorf("failed to update activity store user ID for user %s: %w", oldID, err)
+	}
+
+	return nil
+}
+
+// PopulateUserInfo fetches user email and name from the external IDP and updates
+// the store for users that are missing this information.
+func PopulateUserInfo(s Server, idpManager idp.Manager, dryRun bool) error {
+	ctx := context.Background()
+
+	users, err := s.Store().ListUsers(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list users: %w", err)
+	}
+
+	// Build a map of IDP user ID -> UserData from the external IDP
+	allAccounts, err := idpManager.GetAllAccounts(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to fetch accounts from IDP: %w", err)
+	}
+
+	idpUsers := make(map[string]*idp.UserData)
+	for _, accountUsers := range allAccounts {
+		for _, userData := range accountUsers {
+			idpUsers[userData.ID] = userData
+		}
+	}
+
+	log.Infof("fetched %d users from IDP", len(idpUsers))
+
+	var updatedCount, skippedCount, notFoundCount int
+
+	for _, user := range users {
+		if user.IsServiceUser {
+			skippedCount++
+			continue
+		}
+
+		if user.Email != "" && user.Name != "" {
+			skippedCount++
+			continue
+		}
+
+		// The user ID in the store may be the original IDP ID or a Dex-encoded ID.
+		// Try to decode the Dex format first to get the original IDP ID.
+		lookupID := user.Id
+		if originalID, _, decErr := dex.DecodeDexUserID(user.Id); decErr == nil {
+			lookupID = originalID
+		}
+
+		idpUser, found := idpUsers[lookupID]
+		if !found {
+			notFoundCount++
+			log.Debugf("user %s (lookup: %s) not found in IDP, skipping", user.Id, lookupID)
+			continue
+		}
+
+		email := user.Email
+		name := user.Name
+		if email == "" && idpUser.Email != "" {
+			email = idpUser.Email
+		}
+		if name == "" && idpUser.Name != "" {
+			name = idpUser.Name
+		}
+
+		if email == user.Email && name == user.Name {
+			skippedCount++
+			continue
+		}
+
+		if dryRun {
+			log.Infof("[DRY RUN] would update user %s: email=%q, name=%q", user.Id, email, name)
+			updatedCount++
+			continue
+		}
+
+		if err := s.Store().UpdateUserInfo(ctx, user.Id, email, name); err != nil {
+			return fmt.Errorf("failed to update user info for %s: %w", user.Id, err)
+		}
+
+		log.Infof("updated user %s: email=%q, name=%q", user.Id, email, name)
+		updatedCount++
+	}
+
+	if dryRun {
+		log.Infof("[DRY RUN] user info summary: %d would be updated, %d skipped, %d not found in IDP", updatedCount, skippedCount, notFoundCount)
+	} else {
+		log.Infof("user info population complete: %d updated, %d skipped, %d not found in IDP", updatedCount, skippedCount, notFoundCount)
 	}
 
 	return nil
