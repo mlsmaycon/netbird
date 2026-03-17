@@ -95,6 +95,11 @@ func run(configPath, dataDirOverride, idpSeedInfo string, dryRun, force, skipCon
 		return fmt.Errorf("data directory not set: use --datadir or set Datadir in management.json")
 	}
 
+	// Validate the database schema before attempting any operations.
+	if err := validateSchema(cfg, effectiveDataDir); err != nil {
+		return err
+	}
+
 	if !skipPopulateUserInfo {
 		err := populateUserInfoFromIDP(cfg, effectiveDataDir, dryRun)
 		if err != nil {
@@ -125,6 +130,38 @@ func run(configPath, dataDirOverride, idpSeedInfo string, dryRun, force, skipCon
 	}
 
 	return generateConfig(configPath, conn, cfg, dryRun)
+}
+
+// validateSchema opens the store and checks that all required tables and columns
+// exist. If anything is missing, it returns a descriptive error telling the user
+// to upgrade their management server.
+func validateSchema(cfg *nbconfig.Config, dataDir string) error {
+	ctx := context.Background()
+	migStore, _, cleanup, err := openStores(ctx, cfg, dataDir)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	errs := migStore.CheckSchema(migration.RequiredSchema)
+	if len(errs) > 0 {
+		return fmt.Errorf("%s", formatSchemaErrors(errs))
+	}
+
+	log.Info("database schema check passed")
+	return nil
+}
+
+// formatSchemaErrors returns a user-friendly message listing all missing schema
+// elements and instructing the operator to upgrade.
+func formatSchemaErrors(errs []migration.SchemaError) string {
+	var b strings.Builder
+	b.WriteString("database schema is incomplete — the following tables/columns are missing:\n")
+	for _, e := range errs {
+		b.WriteString(fmt.Sprintf("  - %s\n", e.String()))
+	}
+	b.WriteString("\nPlease start the NetBird management server (v0.60.0+) at least once so that automatic database migrations create the required schema, then re-run this tool.\n")
+	return b.String()
 }
 
 // populateUserInfoFromIDP creates an IDP manager from the config, fetches all

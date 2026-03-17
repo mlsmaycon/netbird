@@ -11,10 +11,30 @@ import (
 	log "github.com/sirupsen/logrus"
 	"gorm.io/gorm"
 
+	"github.com/netbirdio/netbird/management/server/idp/migration"
 	nbpeer "github.com/netbirdio/netbird/management/server/peer"
-	"github.com/netbirdio/netbird/shared/management/status"
 	"github.com/netbirdio/netbird/management/server/types"
+	"github.com/netbirdio/netbird/shared/management/status"
 )
+
+func (s *SqlStore) CheckSchema(checks []migration.SchemaCheck) []migration.SchemaError {
+	migrator := s.db.Migrator()
+	var errs []migration.SchemaError
+
+	for _, check := range checks {
+		if !migrator.HasTable(check.Table) {
+			errs = append(errs, migration.SchemaError{Table: check.Table})
+			continue
+		}
+		for _, col := range check.Columns {
+			if !migrator.HasColumn(check.Table, col) {
+				errs = append(errs, migration.SchemaError{Table: check.Table, Column: col})
+			}
+		}
+	}
+
+	return errs
+}
 
 func (s *SqlStore) ListUsers(ctx context.Context) ([]*types.User, error) {
 	tx := s.db

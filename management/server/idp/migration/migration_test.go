@@ -21,6 +21,7 @@ type testStore struct {
 	listUsersFunc      func(ctx context.Context) ([]*types.User, error)
 	updateUserIDFunc   func(ctx context.Context, accountID, oldUserID, newUserID string) error
 	updateUserInfoFunc func(ctx context.Context, userID, email, name string) error
+	checkSchemaFunc    func(checks []SchemaCheck) []SchemaError
 	updateCalls        []updateUserIDCall
 	updateInfoCalls    []updateUserInfoCall
 }
@@ -50,6 +51,13 @@ func (s *testStore) UpdateUserInfo(ctx context.Context, userID, email, name stri
 	s.updateInfoCalls = append(s.updateInfoCalls, updateUserInfoCall{userID, email, name})
 	if s.updateUserInfoFunc != nil {
 		return s.updateUserInfoFunc(ctx, userID, email, name)
+	}
+	return nil
+}
+
+func (s *testStore) CheckSchema(checks []SchemaCheck) []SchemaError {
+	if s.checkSchemaFunc != nil {
+		return s.checkSchemaFunc(checks)
 	}
 	return nil
 }
@@ -757,5 +765,82 @@ func TestPopulateUserInfo(t *testing.T) {
 		err := PopulateUserInfo(srv, mockIDP, false)
 		assert.NoError(t, err)
 		assert.Empty(t, ms.updateInfoCalls)
+	})
+}
+
+func TestSchemaError_String(t *testing.T) {
+	t.Run("missing table", func(t *testing.T) {
+		e := SchemaError{Table: "jobs"}
+		assert.Equal(t, `table "jobs" is missing`, e.String())
+	})
+
+	t.Run("missing column", func(t *testing.T) {
+		e := SchemaError{Table: "users", Column: "email"}
+		assert.Equal(t, `column "email" on table "users" is missing`, e.String())
+	})
+}
+
+func TestRequiredSchema(t *testing.T) {
+	// Verify RequiredSchema covers all the tables touched by UpdateUserID and UpdateUserInfo.
+	expectedTables := []string{
+		"users",
+		"personal_access_tokens",
+		"peers",
+		"accounts",
+		"user_invites",
+		"proxy_access_tokens",
+		"jobs",
+	}
+
+	schemaTableNames := make([]string, len(RequiredSchema))
+	for i, s := range RequiredSchema {
+		schemaTableNames[i] = s.Table
+	}
+
+	for _, expected := range expectedTables {
+		assert.Contains(t, schemaTableNames, expected, "RequiredSchema should include table %q", expected)
+	}
+}
+
+func TestCheckSchema_MockStore(t *testing.T) {
+	t.Run("returns nil when all schema exists", func(t *testing.T) {
+		ms := &testStore{
+			checkSchemaFunc: func(checks []SchemaCheck) []SchemaError {
+				return nil
+			},
+		}
+		errs := ms.CheckSchema(RequiredSchema)
+		assert.Empty(t, errs)
+	})
+
+	t.Run("returns errors for missing tables", func(t *testing.T) {
+		ms := &testStore{
+			checkSchemaFunc: func(checks []SchemaCheck) []SchemaError {
+				return []SchemaError{
+					{Table: "jobs"},
+					{Table: "proxy_access_tokens"},
+				}
+			},
+		}
+		errs := ms.CheckSchema(RequiredSchema)
+		require.Len(t, errs, 2)
+		assert.Equal(t, "jobs", errs[0].Table)
+		assert.Equal(t, "", errs[0].Column)
+		assert.Equal(t, "proxy_access_tokens", errs[1].Table)
+	})
+
+	t.Run("returns errors for missing columns", func(t *testing.T) {
+		ms := &testStore{
+			checkSchemaFunc: func(checks []SchemaCheck) []SchemaError {
+				return []SchemaError{
+					{Table: "users", Column: "email"},
+					{Table: "users", Column: "name"},
+				}
+			},
+		}
+		errs := ms.CheckSchema(RequiredSchema)
+		require.Len(t, errs, 2)
+		assert.Equal(t, "users", errs[0].Table)
+		assert.Equal(t, "email", errs[0].Column)
 	})
 }
