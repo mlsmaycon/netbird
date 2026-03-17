@@ -11,8 +11,6 @@ import (
 	"github.com/libp2p/go-nat"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/netbirdio/netbird/client/internal/statemanager"
 )
 
 type mockNAT struct {
@@ -68,38 +66,13 @@ func (m *mockNAT) DeletePortMapping(ctx context.Context, protocol string, intern
 	return nil
 }
 
-func setupTestManager(t *testing.T) (*Manager, context.CancelFunc) {
-	tmpDir := t.TempDir()
-	statePath := tmpDir + "/state.json"
-	sm := statemanager.New(statePath)
-	sm.Start()
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		require.NoError(t, sm.Stop(ctx))
-	})
-
-	m := NewManager(sm)
-	m.gateway = newMockNAT()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	m.ctx = ctx
-	m.cancel = cancel
+func TestManager_CreateMapping(t *testing.T) {
+	m := NewManager()
 	m.wgPort = 51820
 
-	sm.RegisterState(&State{})
-
-	return m, cancel
-}
-
-func TestManager_CreateMapping(t *testing.T) {
-	m, cancel := setupTestManager(t)
-	defer cancel()
-
-	err := m.createMapping(nil)
+	gateway := newMockNAT()
+	mapping, err := m.createMapping(context.Background(), gateway)
 	require.NoError(t, err)
-
-	mapping := m.GetMapping()
 	require.NotNil(t, mapping)
 
 	assert.Equal(t, "udp", mapping.Protocol)
@@ -110,36 +83,52 @@ func TestManager_CreateMapping(t *testing.T) {
 }
 
 func TestManager_GetMapping_ReturnsNilWhenNotReady(t *testing.T) {
-	tmpDir := t.TempDir()
-	statePath := tmpDir + "/state.json"
-	sm := statemanager.New(statePath)
-
-	m := NewManager(sm)
-
+	m := NewManager()
 	assert.Nil(t, m.GetMapping())
 }
 
-func TestManager_IsAvailable(t *testing.T) {
-	tmpDir := t.TempDir()
-	statePath := tmpDir + "/state.json"
-	sm := statemanager.New(statePath)
+func TestManager_GetMapping_ReturnsCopy(t *testing.T) {
+	m := NewManager()
+	m.mapping = &Mapping{
+		Protocol:     "udp",
+		InternalPort: 51820,
+		ExternalPort: 51820,
+	}
 
-	m := NewManager(sm)
+	mapping := m.GetMapping()
+	require.NotNil(t, mapping)
+	assert.Equal(t, uint16(51820), mapping.InternalPort)
 
-	// Initially not available (no mapping)
-	assert.False(t, m.IsAvailable())
+	// Mutating the returned copy should not affect the manager's mapping.
+	mapping.ExternalPort = 9999
+	assert.Equal(t, uint16(51820), m.GetMapping().ExternalPort)
+}
 
-	// Set gateway but no mapping - still not available
-	m.gateway = newMockNAT()
-	assert.False(t, m.IsAvailable())
+func TestManager_Cleanup_DeletesMapping(t *testing.T) {
+	m := NewManager()
+	m.mapping = &Mapping{
+		Protocol:     "udp",
+		InternalPort: 51820,
+		ExternalPort: 51820,
+	}
 
-	// Add mapping - now available
-	m.mapping = &Mapping{InternalPort: 51820}
-	assert.True(t, m.IsAvailable())
+	gateway := newMockNAT()
+	// Seed the mock so we can verify deletion.
+	gateway.mappings[51820] = 51820
 
-	// Clear mapping - not available again
-	m.mapping = nil
-	assert.False(t, m.IsAvailable())
+	m.cleanup(context.Background(), gateway)
+
+	_, exists := gateway.mappings[51820]
+	assert.False(t, exists, "mapping should be deleted from gateway")
+	assert.Nil(t, m.GetMapping(), "in-memory mapping should be cleared")
+}
+
+func TestManager_Cleanup_NilMapping(t *testing.T) {
+	m := NewManager()
+	gateway := newMockNAT()
+
+	// Should not panic or call gateway.
+	m.cleanup(context.Background(), gateway)
 }
 
 func TestState_Cleanup(t *testing.T) {
@@ -147,6 +136,7 @@ func TestState_Cleanup(t *testing.T) {
 	defer func() { discoverGateway = origDiscover }()
 
 	mockGateway := newMockNAT()
+	mockGateway.mappings[51820] = 51820
 	discoverGateway = func(ctx context.Context) (nat.NAT, error) {
 		return mockGateway, nil
 	}
@@ -159,7 +149,6 @@ func TestState_Cleanup(t *testing.T) {
 	err := state.Cleanup()
 	assert.NoError(t, err)
 
-	// Verify the mapping was deleted
 	_, exists := mockGateway.mappings[51820]
 	assert.False(t, exists, "mapping should be deleted after cleanup")
 }

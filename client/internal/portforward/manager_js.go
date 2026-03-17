@@ -22,8 +22,10 @@ func NewManager() *Manager {
 	return &Manager{}
 }
 
-// Start is a no-op on js/wasm.
-func (m *Manager) Start(context.Context, uint16) {}
+// Start is a no-op on js/wasm: NAT-PMP/UPnP is not available in browser environments.
+func (m *Manager) Start(context.Context, uint16) {
+	// no NAT traversal in wasm
+}
 
 // GracefullyStop is a no-op on js/wasm.
 func (m *Manager) GracefullyStop(context.Context) error { return nil }

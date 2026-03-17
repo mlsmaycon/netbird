@@ -384,14 +384,6 @@ func (w *WorkerICE) onICECandidate(candidate ice.Candidate) {
 
 // injectPortForwardedCandidate signals an additional candidate using the pre-created port mapping.
 func (w *WorkerICE) injectPortForwardedCandidate(srflxCandidate ice.Candidate) {
-	w.muxAgent.Lock()
-	if w.portForwardAttempted {
-		w.muxAgent.Unlock()
-		return
-	}
-	w.portForwardAttempted = true
-	w.muxAgent.Unlock()
-
 	pfManager := w.conn.portForwardManager
 	if pfManager == nil {
 		return
@@ -401,6 +393,14 @@ func (w *WorkerICE) injectPortForwardedCandidate(srflxCandidate ice.Candidate) {
 	if mapping == nil {
 		return
 	}
+
+	w.muxAgent.Lock()
+	if w.portForwardAttempted {
+		w.muxAgent.Unlock()
+		return
+	}
+	w.portForwardAttempted = true
+	w.muxAgent.Unlock()
 
 	forwardedCandidate, err := w.createForwardedCandidate(srflxCandidate, mapping)
 	if err != nil {

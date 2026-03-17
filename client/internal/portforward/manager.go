@@ -159,18 +159,6 @@ func (m *Manager) setup(ctx context.Context) (nat.NAT, *Mapping, error) {
 	return gateway, mapping, nil
 }
 
-func (m *Manager) cleanupResidual(ctx context.Context, gateway nat.NAT, state *State) error {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	if err := gateway.DeletePortMapping(ctx, state.Protocol, int(state.InternalPort)); err != nil {
-		return fmt.Errorf("delete residual mapping: %w", err)
-	}
-
-	log.Infof("cleaned up residual port mapping for port %d", state.InternalPort)
-	return nil
-}
-
 func (m *Manager) createMapping(ctx context.Context, gateway nat.NAT) (*Mapping, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -237,16 +225,21 @@ func (m *Manager) renewMapping(ctx context.Context, gateway nat.NAT) error {
 }
 
 func (m *Manager) cleanup(ctx context.Context, gateway nat.NAT) {
-	if m.mapping == nil {
+	m.mappingLock.Lock()
+	mapping := m.mapping
+	m.mapping = nil
+	m.mappingLock.Unlock()
+
+	if mapping == nil {
 		return
 	}
 
-	if err := gateway.DeletePortMapping(ctx, m.mapping.Protocol, int(m.mapping.InternalPort)); err != nil {
+	if err := gateway.DeletePortMapping(ctx, mapping.Protocol, int(mapping.InternalPort)); err != nil {
 		log.Warnf("delete port mapping on stop: %v", err)
 		return
 	}
 
-	log.Infof("deleted port mapping for port %d", m.mapping.InternalPort)
+	log.Infof("deleted port mapping for port %d", mapping.InternalPort)
 }
 
 func (m *Manager) startTearDown(ctx context.Context) {
