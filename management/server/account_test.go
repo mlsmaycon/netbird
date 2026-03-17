@@ -15,10 +15,12 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/netbirdio/netbird/shared/management/status"
 	"github.com/prometheus/client_golang/prometheus/push"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/metric/noop"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
 	nbdns "github.com/netbirdio/netbird/dns"
@@ -27,8 +29,13 @@ import (
 	"github.com/netbirdio/netbird/management/internals/controllers/network_map/update_channel"
 	"github.com/netbirdio/netbird/management/internals/modules/peers"
 	ephemeral_manager "github.com/netbirdio/netbird/management/internals/modules/peers/ephemeral/manager"
+	"github.com/netbirdio/netbird/management/internals/modules/reverseproxy/proxy"
+	proxymanager "github.com/netbirdio/netbird/management/internals/modules/reverseproxy/proxy/manager"
+	"github.com/netbirdio/netbird/management/internals/modules/reverseproxy/service"
+	reverseproxymanager "github.com/netbirdio/netbird/management/internals/modules/reverseproxy/service/manager"
 	"github.com/netbirdio/netbird/management/internals/modules/zones"
 	"github.com/netbirdio/netbird/management/internals/server/config"
+	nbgrpc "github.com/netbirdio/netbird/management/internals/shared/grpc"
 	nbAccount "github.com/netbirdio/netbird/management/server/account"
 	"github.com/netbirdio/netbird/management/server/activity"
 	"github.com/netbirdio/netbird/management/server/cache"
@@ -1800,6 +1807,14 @@ func TestAccount_Copy(t *testing.T) {
 				Address:   "172.12.6.1/24",
 			},
 		},
+		Services: []*service.Service{
+			{
+				ID:        "service1",
+				Name:      "test-service",
+				AccountID: "account1",
+				Targets:   []*service.Target{},
+			},
+		},
 		NetworkMapCache: &types.NetworkMapBuilder{},
 	}
 	account.InitOnce()
@@ -1881,7 +1896,7 @@ func TestDefaultAccountManager_UpdatePeer_PeerLoginExpiration(t *testing.T) {
 	accountID, err := manager.GetAccountIDByUserID(context.Background(), auth.UserAuth{UserId: userID})
 	require.NoError(t, err, "unable to get the account")
 
-	err = manager.MarkPeerConnected(context.Background(), key.PublicKey().String(), true, nil, accountID)
+	err = manager.MarkPeerConnected(context.Background(), key.PublicKey().String(), true, nil, accountID, time.Now().UTC())
 	require.NoError(t, err, "unable to mark peer connected")
 
 	_, err = manager.UpdateAccountSettings(context.Background(), accountID, userID, &types.Settings{
@@ -1952,13 +1967,89 @@ func TestDefaultAccountManager_MarkPeerConnected_PeerLoginExpiration(t *testing.
 	require.NoError(t, err, "unable to get the account")
 
 	// when we mark peer as connected, the peer login expiration routine should trigger
-	err = manager.MarkPeerConnected(context.Background(), key.PublicKey().String(), true, nil, accountID)
+	err = manager.MarkPeerConnected(context.Background(), key.PublicKey().String(), true, nil, accountID, time.Now().UTC())
 	require.NoError(t, err, "unable to mark peer connected")
 
 	failed := waitTimeout(wg, time.Second)
 	if failed {
 		t.Fatal("timeout while waiting for test to finish")
 	}
+}
+
+func TestDefaultAccountManager_OnPeerDisconnected_LastSeenCheck(t *testing.T) {
+	manager, _, err := createManager(t)
+	require.NoError(t, err, "unable to create account manager")
+
+	accountID, err := manager.GetAccountIDByUserID(context.Background(), auth.UserAuth{UserId: userID})
+	require.NoError(t, err, "unable to create an account")
+
+	key, err := wgtypes.GenerateKey()
+	require.NoError(t, err, "unable to generate WireGuard key")
+	peerPubKey := key.PublicKey().String()
+
+	_, _, _, err = manager.AddPeer(context.Background(), "", "", userID, &nbpeer.Peer{
+		Key:  peerPubKey,
+		Meta: nbpeer.PeerSystemMeta{Hostname: "test-peer"},
+	}, false)
+	require.NoError(t, err, "unable to add peer")
+
+	t.Run("disconnect peer when streamStartTime is after LastSeen", func(t *testing.T) {
+		err = manager.MarkPeerConnected(context.Background(), peerPubKey, true, nil, accountID, time.Now().UTC())
+		require.NoError(t, err, "unable to mark peer connected")
+
+		peer, err := manager.Store.GetPeerByPeerPubKey(context.Background(), store.LockingStrengthNone, peerPubKey)
+		require.NoError(t, err, "unable to get peer")
+		require.True(t, peer.Status.Connected, "peer should be connected")
+
+		streamStartTime := time.Now().UTC()
+
+		err = manager.OnPeerDisconnected(context.Background(), accountID, peerPubKey, streamStartTime)
+		require.NoError(t, err)
+
+		peer, err = manager.Store.GetPeerByPeerPubKey(context.Background(), store.LockingStrengthNone, peerPubKey)
+		require.NoError(t, err)
+		require.False(t, peer.Status.Connected, "peer should be disconnected")
+	})
+
+	t.Run("skip disconnect when LastSeen is after streamStartTime (zombie stream protection)", func(t *testing.T) {
+		err = manager.MarkPeerConnected(context.Background(), peerPubKey, true, nil, accountID, time.Now().UTC())
+		require.NoError(t, err, "unable to mark peer connected")
+
+		peer, err := manager.Store.GetPeerByPeerPubKey(context.Background(), store.LockingStrengthNone, peerPubKey)
+		require.NoError(t, err)
+		require.True(t, peer.Status.Connected, "peer should be connected")
+
+		streamStartTime := peer.Status.LastSeen.Add(-1 * time.Hour)
+
+		err = manager.OnPeerDisconnected(context.Background(), accountID, peerPubKey, streamStartTime)
+		require.NoError(t, err)
+
+		peer, err = manager.Store.GetPeerByPeerPubKey(context.Background(), store.LockingStrengthNone, peerPubKey)
+		require.NoError(t, err)
+		require.True(t, peer.Status.Connected,
+			"peer should remain connected because LastSeen > streamStartTime (zombie stream protection)")
+	})
+
+	t.Run("skip stale connect when peer already has newer LastSeen (blocked goroutine protection)", func(t *testing.T) {
+		node2SyncTime := time.Now().UTC()
+		err = manager.MarkPeerConnected(context.Background(), peerPubKey, true, nil, accountID, node2SyncTime)
+		require.NoError(t, err, "node 2 should connect peer")
+
+		peer, err := manager.Store.GetPeerByPeerPubKey(context.Background(), store.LockingStrengthNone, peerPubKey)
+		require.NoError(t, err)
+		require.True(t, peer.Status.Connected, "peer should be connected")
+		require.Equal(t, node2SyncTime.Unix(), peer.Status.LastSeen.Unix(), "LastSeen should be node2SyncTime")
+
+		node1StaleSyncTime := node2SyncTime.Add(-1 * time.Minute)
+		err = manager.MarkPeerConnected(context.Background(), peerPubKey, true, nil, accountID, node1StaleSyncTime)
+		require.NoError(t, err, "stale connect should not return error")
+
+		peer, err = manager.Store.GetPeerByPeerPubKey(context.Background(), store.LockingStrengthNone, peerPubKey)
+		require.NoError(t, err)
+		require.True(t, peer.Status.Connected, "peer should still be connected")
+		require.Equal(t, node2SyncTime.Unix(), peer.Status.LastSeen.Unix(),
+			"LastSeen should NOT be overwritten by stale syncTime from blocked goroutine")
+	})
 }
 
 func TestDefaultAccountManager_UpdateAccountSettings_PeerLoginExpiration(t *testing.T) {
@@ -1983,7 +2074,7 @@ func TestDefaultAccountManager_UpdateAccountSettings_PeerLoginExpiration(t *test
 	account, err := manager.Store.GetAccount(context.Background(), accountID)
 	require.NoError(t, err, "unable to get the account")
 
-	err = manager.MarkPeerConnected(context.Background(), key.PublicKey().String(), true, nil, accountID)
+	err = manager.MarkPeerConnected(context.Background(), key.PublicKey().String(), true, nil, accountID, time.Now().UTC())
 	require.NoError(t, err, "unable to mark peer connected")
 
 	wg := &sync.WaitGroup{}
@@ -3026,6 +3117,12 @@ func createManager(t testing.TB) (*DefaultAccountManager, *update_channel.PeersU
 	permissionsManager := permissions.NewManager(store)
 	peersManager := peers.NewManager(store, permissionsManager)
 
+	proxyManager := proxy.NewMockManager(ctrl)
+	proxyManager.EXPECT().
+		CleanupStale(gomock.Any(), gomock.Any()).
+		Return(nil).
+		AnyTimes()
+
 	ctx := context.Background()
 
 	updateManager := update_channel.NewPeersUpdateManager(metrics)
@@ -3035,6 +3132,13 @@ func createManager(t testing.TB) (*DefaultAccountManager, *update_channel.PeersU
 	if err != nil {
 		return nil, nil, err
 	}
+
+	proxyGrpcServer := nbgrpc.NewProxyServiceServer(nil, nil, nil, nbgrpc.ProxyOIDCConfig{}, peersManager, nil, proxyManager)
+	proxyController, err := proxymanager.NewGRPCController(proxyGrpcServer, noop.Meter{})
+	if err != nil {
+		return nil, nil, err
+	}
+	manager.SetServiceManager(reverseproxymanager.NewManager(store, manager, permissionsManager, proxyController, nil))
 
 	return manager, updateManager, nil
 }
@@ -3176,7 +3280,7 @@ func BenchmarkSyncAndMarkPeer(b *testing.B) {
 			b.ResetTimer()
 			start := time.Now()
 			for i := 0; i < b.N; i++ {
-				_, _, _, _, err := manager.SyncAndMarkPeer(context.Background(), account.Id, account.Peers["peer-1"].Key, nbpeer.PeerSystemMeta{Hostname: strconv.Itoa(i)}, net.IP{1, 1, 1, 1})
+				_, _, _, _, err := manager.SyncAndMarkPeer(context.Background(), account.Id, account.Peers["peer-1"].Key, nbpeer.PeerSystemMeta{Hostname: strconv.Itoa(i)}, net.IP{1, 1, 1, 1}, time.Now().UTC())
 				assert.NoError(b, err)
 			}
 
@@ -3829,4 +3933,150 @@ func TestAddNewUserToDomainAccountWithoutApproval(t *testing.T) {
 	assert.False(t, user.Blocked, "User should not be blocked when approval is not required")
 	assert.False(t, user.PendingApproval, "User should not be pending approval")
 	assert.Equal(t, existingAccountID, user.AccountID)
+}
+
+// TestDefaultAccountManager_UpdateAccountSettings_NetworkRangeChange verifies that
+// changing NetworkRange via UpdateAccountSettings does not deadlock.
+// The deadlock occurs because ReloadAllServicesForAccount is called inside a DB
+// transaction but uses the main store connection, which blocks on the transaction lock.
+func TestDefaultAccountManager_UpdateAccountSettings_NetworkRangeChange(t *testing.T) {
+	manager, _, err := createManager(t)
+	require.NoError(t, err)
+
+	accountID, err := manager.GetAccountIDByUserID(context.Background(), auth.UserAuth{UserId: userID})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// Use a channel to detect if the call completes or hangs
+	done := make(chan error, 1)
+	go func() {
+		_, err := manager.UpdateAccountSettings(ctx, accountID, userID, &types.Settings{
+			PeerLoginExpiration:        time.Hour,
+			PeerLoginExpirationEnabled: true,
+			NetworkRange:               netip.MustParsePrefix("10.100.0.0/16"),
+			Extra:                      &types.ExtraSettings{},
+		})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err, "UpdateAccountSettings should complete without error")
+	case <-time.After(10 * time.Second):
+		t.Fatal("UpdateAccountSettings deadlocked when changing NetworkRange")
+	}
+}
+
+func TestUpdateUserAuthWithSingleMode(t *testing.T) {
+	t.Run("sets defaults and overrides domain from store", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		t.Cleanup(ctrl.Finish)
+
+		mockStore := store.NewMockStore(ctrl)
+		mockStore.EXPECT().
+			GetAnyAccountID(gomock.Any()).
+			Return("account-1", nil)
+		mockStore.EXPECT().
+			GetAccountDomainAndCategory(gomock.Any(), store.LockingStrengthNone, "account-1").
+			Return("real-domain.com", "private", nil)
+
+		am := &DefaultAccountManager{
+			Store:                   mockStore,
+			singleAccountModeDomain: "fallback.com",
+		}
+
+		userAuth := &auth.UserAuth{}
+		err := am.updateUserAuthWithSingleMode(context.Background(), userAuth)
+		require.NoError(t, err)
+		assert.Equal(t, "real-domain.com", userAuth.Domain)
+		assert.Equal(t, types.PrivateCategory, userAuth.DomainCategory)
+	})
+
+	t.Run("falls back to singleAccountModeDomain when account ID is empty", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		t.Cleanup(ctrl.Finish)
+
+		mockStore := store.NewMockStore(ctrl)
+		mockStore.EXPECT().
+			GetAnyAccountID(gomock.Any()).
+			Return("", nil)
+
+		am := &DefaultAccountManager{
+			Store:                   mockStore,
+			singleAccountModeDomain: "fallback.com",
+		}
+
+		userAuth := &auth.UserAuth{}
+		err := am.updateUserAuthWithSingleMode(context.Background(), userAuth)
+		require.NoError(t, err)
+		assert.Equal(t, "fallback.com", userAuth.Domain)
+		assert.Equal(t, types.PrivateCategory, userAuth.DomainCategory)
+	})
+
+	t.Run("falls back to singleAccountModeDomain on NotFound error", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		t.Cleanup(ctrl.Finish)
+
+		mockStore := store.NewMockStore(ctrl)
+		mockStore.EXPECT().
+			GetAnyAccountID(gomock.Any()).
+			Return("", status.Errorf(status.NotFound, "no accounts"))
+
+		am := &DefaultAccountManager{
+			Store:                   mockStore,
+			singleAccountModeDomain: "fallback.com",
+		}
+
+		userAuth := &auth.UserAuth{}
+		err := am.updateUserAuthWithSingleMode(context.Background(), userAuth)
+		require.NoError(t, err)
+		assert.Equal(t, "fallback.com", userAuth.Domain)
+		assert.Equal(t, types.PrivateCategory, userAuth.DomainCategory)
+	})
+
+	t.Run("propagates non-NotFound error from GetAnyAccountID", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		t.Cleanup(ctrl.Finish)
+
+		mockStore := store.NewMockStore(ctrl)
+		mockStore.EXPECT().
+			GetAnyAccountID(gomock.Any()).
+			Return("", status.Errorf(status.Internal, "db down"))
+
+		am := &DefaultAccountManager{
+			Store:                   mockStore,
+			singleAccountModeDomain: "fallback.com",
+		}
+
+		userAuth := &auth.UserAuth{}
+		err := am.updateUserAuthWithSingleMode(context.Background(), userAuth)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "db down")
+		// Defaults should still be set before error path
+		assert.Equal(t, types.PrivateCategory, userAuth.DomainCategory)
+	})
+
+	t.Run("propagates error from GetAccountDomainAndCategory", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		t.Cleanup(ctrl.Finish)
+
+		mockStore := store.NewMockStore(ctrl)
+		mockStore.EXPECT().
+			GetAnyAccountID(gomock.Any()).
+			Return("account-1", nil)
+		mockStore.EXPECT().
+			GetAccountDomainAndCategory(gomock.Any(), store.LockingStrengthNone, "account-1").
+			Return("", "", status.Errorf(status.Internal, "query failed"))
+
+		am := &DefaultAccountManager{
+			Store:                   mockStore,
+			singleAccountModeDomain: "fallback.com",
+		}
+
+		userAuth := &auth.UserAuth{}
+		err := am.updateUserAuthWithSingleMode(context.Background(), userAuth)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "query failed")
+	})
 }

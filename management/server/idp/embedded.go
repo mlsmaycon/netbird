@@ -43,11 +43,16 @@ type EmbeddedIdPConfig struct {
 	Owner *OwnerConfig
 	// SignKeyRefreshEnabled enables automatic key rotation for signing keys
 	SignKeyRefreshEnabled bool
+	// LocalAuthDisabled disables the local (email/password) authentication connector.
+	// When true, users cannot authenticate via email/password, only via external identity providers.
+	// Existing local users are preserved and will be able to login again if re-enabled.
+	// Cannot be enabled if no external identity provider connectors are configured.
+	LocalAuthDisabled bool
 }
 
 // EmbeddedStorageConfig holds storage configuration for the embedded IdP.
 type EmbeddedStorageConfig struct {
-	// Type is the storage type (currently only "sqlite3" is supported)
+	// Type is the storage type: "sqlite3" (default) or "postgres"
 	Type string
 	// Config contains type-specific configuration
 	Config EmbeddedStorageTypeConfig
@@ -57,6 +62,8 @@ type EmbeddedStorageConfig struct {
 type EmbeddedStorageTypeConfig struct {
 	// File is the path to the SQLite database file (for sqlite3 type)
 	File string
+	// DSN is the connection string for postgres
+	DSN string
 }
 
 // OwnerConfig represents the initial owner/admin user for the embedded IdP.
@@ -67,6 +74,22 @@ type OwnerConfig struct {
 	Hash string
 	// Username is the display name for the user (optional, defaults to email)
 	Username string
+}
+
+// buildIdpStorageConfig builds the Dex storage config map based on the storage type.
+func buildIdpStorageConfig(storageType string, cfg EmbeddedStorageTypeConfig) (map[string]interface{}, error) {
+	switch storageType {
+	case "sqlite3":
+		return map[string]interface{}{
+			"file": cfg.File,
+		}, nil
+	case "postgres":
+		return map[string]interface{}{
+			"dsn": cfg.DSN,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported IdP storage type: %s", storageType)
+	}
 }
 
 // ToYAMLConfig converts EmbeddedIdPConfig to dex.YAMLConfig.
@@ -80,19 +103,31 @@ func (c *EmbeddedIdPConfig) ToYAMLConfig() (*dex.YAMLConfig, error) {
 	if c.Storage.Type == "sqlite3" && c.Storage.Config.File == "" {
 		return nil, fmt.Errorf("storage file is required for sqlite3")
 	}
+	if c.Storage.Type == "postgres" && c.Storage.Config.DSN == "" {
+		return nil, fmt.Errorf("storage DSN is required for postgres")
+	}
+
+	storageConfig, err := buildIdpStorageConfig(c.Storage.Type, c.Storage.Config)
+	if err != nil {
+		return nil, fmt.Errorf("invalid IdP storage config: %w", err)
+	}
 
 	// Build CLI redirect URIs including the device callback (both relative and absolute)
 	cliRedirectURIs := c.CLIRedirectURIs
 	cliRedirectURIs = append(cliRedirectURIs, "/device/callback")
 	cliRedirectURIs = append(cliRedirectURIs, c.Issuer+"/device/callback")
 
+	// Build dashboard redirect URIs including the OAuth callback for proxy authentication
+	dashboardRedirectURIs := c.DashboardRedirectURIs
+	baseURL := strings.TrimSuffix(c.Issuer, "/oauth2")
+	// todo: resolve import cycle
+	dashboardRedirectURIs = append(dashboardRedirectURIs, baseURL+"/api/reverse-proxy/callback")
+
 	cfg := &dex.YAMLConfig{
 		Issuer: c.Issuer,
 		Storage: dex.Storage{
-			Type: c.Storage.Type,
-			Config: map[string]interface{}{
-				"file": c.Storage.Config.File,
-			},
+			Type:   c.Storage.Type,
+			Config: storageConfig,
 		},
 		Web: dex.Web{
 			AllowedOrigins: []string{"*"},
@@ -105,13 +140,15 @@ func (c *EmbeddedIdPConfig) ToYAMLConfig() (*dex.YAMLConfig, error) {
 			Issuer: "NetBird",
 			Theme:  "light",
 		},
+		// Always enable password DB initially - we disable the local connector after startup if needed.
+		// This ensures Dex has at least one connector during initialization.
 		EnablePasswordDB: true,
 		StaticClients: []storage.Client{
 			{
 				ID:           staticClientDashboard,
 				Name:         "NetBird Dashboard",
 				Public:       true,
-				RedirectURIs: c.DashboardRedirectURIs,
+				RedirectURIs: dashboardRedirectURIs,
 			},
 			{
 				ID:           staticClientCLI,
@@ -192,9 +229,30 @@ func NewEmbeddedIdPManager(ctx context.Context, config *EmbeddedIdPConfig, appMe
 		return nil, err
 	}
 
+	log.WithContext(ctx).Debugf("initializing embedded Dex IDP with config: %+v", config)
+
 	provider, err := dex.NewProviderFromYAML(ctx, yamlConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create embedded IdP provider: %w", err)
+	}
+
+	// If local auth is disabled, validate that other connectors exist
+	if config.LocalAuthDisabled {
+		hasOthers, err := provider.HasNonLocalConnectors(ctx)
+		if err != nil {
+			_ = provider.Stop(ctx)
+			return nil, fmt.Errorf("failed to check connectors: %w", err)
+		}
+		if !hasOthers {
+			_ = provider.Stop(ctx)
+			return nil, fmt.Errorf("cannot disable local authentication: no other identity providers configured")
+		}
+		// Ensure local connector is removed (it might exist from a previous run)
+		if err := provider.DisableLocalAuth(ctx); err != nil {
+			_ = provider.Stop(ctx)
+			return nil, fmt.Errorf("failed to disable local auth: %w", err)
+		}
+		log.WithContext(ctx).Info("local authentication disabled - only external identity providers can be used")
 	}
 
 	log.WithContext(ctx).Infof("embedded Dex IDP initialized with issuer: %s", yamlConfig.Issuer)
@@ -281,6 +339,8 @@ func (m *EmbeddedIdPManager) GetAllAccounts(ctx context.Context) (map[string][]*
 		return nil, fmt.Errorf("failed to list users: %w", err)
 	}
 
+	log.WithContext(ctx).Debugf("retrieved %d users from embedded IdP", len(users))
+
 	indexedUsers := make(map[string][]*UserData)
 	for _, user := range users {
 		indexedUsers[UnsetAccountID] = append(indexedUsers[UnsetAccountID], &UserData{
@@ -290,11 +350,17 @@ func (m *EmbeddedIdPManager) GetAllAccounts(ctx context.Context) (map[string][]*
 		})
 	}
 
+	log.WithContext(ctx).Debugf("retrieved %d users from embedded IdP", len(indexedUsers[UnsetAccountID]))
+
 	return indexedUsers, nil
 }
 
 // CreateUser creates a new user in the embedded IdP.
 func (m *EmbeddedIdPManager) CreateUser(ctx context.Context, email, name, accountID, invitedByEmail string) (*UserData, error) {
+	if m.config.LocalAuthDisabled {
+		return nil, fmt.Errorf("local user creation is disabled")
+	}
+
 	if m.appMetrics != nil {
 		m.appMetrics.IDPMetrics().CountCreateUser()
 	}
@@ -364,6 +430,10 @@ func (m *EmbeddedIdPManager) GetUserByEmail(ctx context.Context, email string) (
 // Unlike CreateUser which auto-generates a password, this method uses the provided password.
 // This is useful for instance setup where the user provides their own password.
 func (m *EmbeddedIdPManager) CreateUserWithPassword(ctx context.Context, email, password, name string) (*UserData, error) {
+	if m.config.LocalAuthDisabled {
+		return nil, fmt.Errorf("local user creation is disabled")
+	}
+
 	if m.appMetrics != nil {
 		m.appMetrics.IDPMetrics().CountCreateUser()
 	}
@@ -552,4 +622,14 @@ func (m *EmbeddedIdPManager) GetClientIDs() []string {
 // GetUserIDClaim returns the JWT claim name used for user identification.
 func (m *EmbeddedIdPManager) GetUserIDClaim() string {
 	return defaultUserIDClaim
+}
+
+// IsLocalAuthDisabled returns whether local authentication is disabled based on configuration.
+func (m *EmbeddedIdPManager) IsLocalAuthDisabled() bool {
+	return m.config.LocalAuthDisabled
+}
+
+// HasNonLocalConnectors checks if there are any identity provider connectors other than local.
+func (m *EmbeddedIdPManager) HasNonLocalConnectors(ctx context.Context) (bool, error) {
+	return m.provider.HasNonLocalConnectors(ctx)
 }
