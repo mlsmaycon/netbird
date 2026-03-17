@@ -30,7 +30,7 @@ func wrapHandler(h func(w http.ResponseWriter, r *http.Request, userAuth *auth.U
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
-		h(w, r, userAuth)
+		h(w, r, &userAuth)
 	}
 }
 

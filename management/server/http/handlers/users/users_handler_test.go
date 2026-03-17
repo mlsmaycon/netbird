@@ -857,7 +857,7 @@ func TestRejectUserEndpoint(t *testing.T) {
 
 			handler := newHandler(am)
 			router := mux.NewRouter()
-			router.HandleFunc("/users/{userId}/reject", handler.rejectUser).Methods("DELETE")
+			router.HandleFunc("/users/{userId}/reject", wrapHandler(handler.rejectUser)).Methods("DELETE")
 
 			req, err := http.NewRequest("DELETE", "/users/pending-user/reject", nil)
 			require.NoError(t, err)
@@ -948,7 +948,7 @@ func TestChangePasswordEndpoint(t *testing.T) {
 
 			handler := newHandler(am)
 			router := mux.NewRouter()
-			router.HandleFunc("/users/{userId}/password", handler.changePassword).Methods("PUT")
+			router.HandleFunc("/users/{userId}/password", wrapHandler(handler.changePassword)).Methods("PUT")
 
 			reqPath := "/users/" + tc.targetUserID + "/password"
 			req, err := http.NewRequest("PUT", reqPath, bytes.NewBufferString(tc.requestBody))
@@ -987,7 +987,7 @@ func TestChangePasswordEndpoint_WrongMethod(t *testing.T) {
 	req = nbcontext.SetUserAuthInRequest(req, userAuth)
 
 	rr := httptest.NewRecorder()
-	handler.changePassword(rr, req)
+	handler.changePassword(rr, req, &userAuth)
 
 	assert.Equal(t, http.StatusMethodNotAllowed, rr.Code)
 }

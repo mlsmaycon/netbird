@@ -362,12 +362,12 @@ func startManagementForTest(t *testing.T, testFile string, config *config.Config
 		AnyTimes()
 	permissionsManager := permissions.NewManager(store)
 	groupsManager := groups.NewManagerMock()
-	peersManager := peers.NewManager(store, permissionsManager)
+	peersManager := peers.NewManager(store)
 	jobManager := job.NewJobManager(nil, store, peersManager)
 
 	updateManager := update_channel.NewPeersUpdateManager(metrics)
 	requestBuffer := NewAccountRequestBuffer(ctx, store)
-	ephemeralMgr := manager.NewEphemeralManager(store, peers.NewManager(store, permissionsManager))
+	ephemeralMgr := manager.NewEphemeralManager(store, peers.NewManager(store))
 
 	networkMapController := controller.NewController(ctx, store, metrics, updateManager, requestBuffer, MockIntegratedValidator{}, settingsMockManager, "netbird.selfhosted", port_forwarding.NewControllerMock(), ephemeralMgr, config)
 	accountManager, err := BuildManager(ctx, nil, store, networkMapController, jobManager, nil, "",

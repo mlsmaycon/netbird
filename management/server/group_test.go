@@ -765,7 +765,7 @@ func TestGroupAccountPeersUpdate(t *testing.T) {
 	// Saving a group linked to network router should update account peers and send peer update
 	t.Run("saving group linked to network router", func(t *testing.T) {
 		permissionsManager := permissions.NewManager(manager.Store)
-		groupsManager := groups.NewManager(manager.Store, permissionsManager, manager)
+		groupsManager := groups.NewManager(manager.Store, manager)
 		resourcesManager := resources.NewManager(manager.Store, permissionsManager, groupsManager, manager, manager.serviceManager)
 		routersManager := routers.NewManager(manager.Store, permissionsManager, manager)
 		networksManager := networks.NewManager(manager.Store, permissionsManager, resourcesManager, routersManager, manager)

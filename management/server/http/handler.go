@@ -175,7 +175,6 @@ func NewAPIHandler(ctx context.Context, accountManager account.Manager, networks
 	if serviceManager != nil && reverseProxyDomainManager != nil {
 		reverseproxymanager.RegisterEndpoints(serviceManager, *reverseProxyDomainManager, reverseProxyAccessLogsManager, permissionsManager, router)
 	}
-
 	// Register OAuth callback handler for proxy authentication
 	if proxyGRPCServer != nil {
 		oauthHandler := proxy.NewAuthCallbackHandler(proxyGRPCServer, trustedHTTPProxies)

@@ -80,7 +80,7 @@ func wrapHandler(h func(w http.ResponseWriter, r *http.Request, userAuth *auth.U
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
-		h(w, r, userAuth)
+		h(w, r, &userAuth)
 	}
 }
 
@@ -133,6 +133,7 @@ func TestAccounts_AccountsHandler(t *testing.T) {
 				RoutingPeerDnsResolutionEnabled: br(false),
 				LazyConnectionEnabled:           br(false),
 				DnsDomain:                       sr(""),
+				AutoUpdateAlways:                br(false),
 				AutoUpdateVersion:               sr(""),
 				EmbeddedIdpEnabled:              br(false),
 				LocalAuthDisabled:               br(false),
@@ -158,6 +159,7 @@ func TestAccounts_AccountsHandler(t *testing.T) {
 				RoutingPeerDnsResolutionEnabled: br(false),
 				LazyConnectionEnabled:           br(false),
 				DnsDomain:                       sr(""),
+				AutoUpdateAlways:                br(false),
 				AutoUpdateVersion:               sr(""),
 				EmbeddedIdpEnabled:              br(false),
 				LocalAuthDisabled:               br(false),
@@ -183,6 +185,7 @@ func TestAccounts_AccountsHandler(t *testing.T) {
 				RoutingPeerDnsResolutionEnabled: br(false),
 				LazyConnectionEnabled:           br(false),
 				DnsDomain:                       sr(""),
+				AutoUpdateAlways:                br(false),
 				AutoUpdateVersion:               sr("latest"),
 				EmbeddedIdpEnabled:              br(false),
 				LocalAuthDisabled:               br(false),
@@ -208,6 +211,7 @@ func TestAccounts_AccountsHandler(t *testing.T) {
 				RoutingPeerDnsResolutionEnabled: br(false),
 				LazyConnectionEnabled:           br(false),
 				DnsDomain:                       sr(""),
+				AutoUpdateAlways:                br(false),
 				AutoUpdateVersion:               sr(""),
 				EmbeddedIdpEnabled:              br(false),
 				LocalAuthDisabled:               br(false),
@@ -233,6 +237,7 @@ func TestAccounts_AccountsHandler(t *testing.T) {
 				RoutingPeerDnsResolutionEnabled: br(false),
 				LazyConnectionEnabled:           br(false),
 				DnsDomain:                       sr(""),
+				AutoUpdateAlways:                br(false),
 				AutoUpdateVersion:               sr(""),
 				EmbeddedIdpEnabled:              br(false),
 				LocalAuthDisabled:               br(false),
@@ -258,6 +263,7 @@ func TestAccounts_AccountsHandler(t *testing.T) {
 				RoutingPeerDnsResolutionEnabled: br(false),
 				LazyConnectionEnabled:           br(false),
 				DnsDomain:                       sr(""),
+				AutoUpdateAlways:                br(false),
 				AutoUpdateVersion:               sr(""),
 				EmbeddedIdpEnabled:              br(false),
 				LocalAuthDisabled:               br(false),

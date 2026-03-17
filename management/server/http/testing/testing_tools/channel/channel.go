@@ -80,8 +80,8 @@ func BuildApiBlackBoxWithDBState(t testing_tools.TB, sqlFile string, expectedPee
 	proxyController := integrations.NewController(store)
 	userManager := users.NewManager(store)
 	permissionsManager := permissions.NewManager(store)
-	settingsManager := settings.NewManager(store, userManager, integrations.NewManager(&activity.InMemoryEventStore{}), permissionsManager, settings.IdpConfig{})
-	peersManager := peers.NewManager(store, permissionsManager)
+	settingsManager := settings.NewManager(store, userManager, integrations.NewManager(&activity.InMemoryEventStore{}), settings.IdpConfig{})
+	peersManager := peers.NewManager(store)
 
 	jobManager := job.NewJobManager(nil, store, peersManager)
 
@@ -93,23 +93,28 @@ func BuildApiBlackBoxWithDBState(t testing_tools.TB, sqlFile string, expectedPee
 		t.Fatalf("Failed to create manager: %v", err)
 	}
 
-	accessLogsManager := accesslogsmanager.NewManager(store, permissionsManager, nil)
+	accessLogsManager := accesslogsmanager.NewManager(store, nil)
 	proxyTokenStore, err := nbgrpc.NewOneTimeTokenStore(ctx, 5*time.Minute, 10*time.Minute, 100)
 	if err != nil {
 		t.Fatalf("Failed to create proxy token store: %v", err)
+	}
+	pkceverifierStore, err := nbgrpc.NewPKCEVerifierStore(ctx, 10*time.Minute, 10*time.Minute, 100)
+	if err != nil {
+		t.Fatalf("Failed to create PKCE verifier store: %v", err)
 	}
 	noopMeter := noop.NewMeterProvider().Meter("")
 	proxyMgr, err := proxymanager.NewManager(store, noopMeter)
 	if err != nil {
 		t.Fatalf("Failed to create proxy manager: %v", err)
 	}
-	proxyServiceServer := nbgrpc.NewProxyServiceServer(accessLogsManager, proxyTokenStore, nbgrpc.ProxyOIDCConfig{}, peersManager, userManager, proxyMgr)
-	domainManager := manager.NewManager(store, proxyMgr, permissionsManager)
+	proxyServiceServer := nbgrpc.NewProxyServiceServer(accessLogsManager, proxyTokenStore, pkceverifierStore, nbgrpc.ProxyOIDCConfig{}, peersManager, userManager, proxyMgr)
+	domainManager := manager.NewManager(store, proxyMgr, am)
 	serviceProxyController, err := proxymanager.NewGRPCController(proxyServiceServer, noopMeter)
 	if err != nil {
 		t.Fatalf("Failed to create proxy controller: %v", err)
 	}
-	serviceManager := reverseproxymanager.NewManager(store, am, permissionsManager, serviceProxyController, domainManager)
+	domainManager.SetClusterCapabilities(serviceProxyController)
+	serviceManager := reverseproxymanager.NewManager(store, am, serviceProxyController, domainManager)
 	proxyServiceServer.SetServiceManager(serviceManager)
 	am.SetServiceManager(serviceManager)
 
@@ -126,8 +131,8 @@ func BuildApiBlackBoxWithDBState(t testing_tools.TB, sqlFile string, expectedPee
 	resourcesManagerMock := resources.NewManagerMock()
 	routersManagerMock := routers.NewManagerMock()
 	groupsManagerMock := groups.NewManagerMock()
-	customZonesManager := zonesManager.NewManager(store, am, permissionsManager, "")
-	zoneRecordsManager := recordsManager.NewManager(store, am, permissionsManager)
+	customZonesManager := zonesManager.NewManager(store, am, "")
+	zoneRecordsManager := recordsManager.NewManager(store, am)
 
 	apiHandler, err := http2.NewAPIHandler(context.Background(), am, networksManagerMock, resourcesManagerMock, routersManagerMock, groupsManagerMock, geoMock, authManagerMock, metrics, validatorMock, proxyController, permissionsManager, peersManager, settingsManager, customZonesManager, zoneRecordsManager, networkMapController, nil, serviceManager, nil, nil, nil, nil)
 	if err != nil {

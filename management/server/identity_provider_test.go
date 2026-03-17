@@ -81,7 +81,7 @@ func createManagerWithEmbeddedIdP(t testing.TB) (*DefaultAccountManager, *update
 		AnyTimes()
 
 	permissionsManager := permissions.NewManager(testStore)
-	peersManager := peers.NewManager(testStore, permissionsManager)
+	peersManager := peers.NewManager(testStore)
 
 	updateManager := update_channel.NewPeersUpdateManager(metrics)
 	requestBuffer := NewAccountRequestBuffer(ctx, testStore)

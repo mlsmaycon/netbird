@@ -20,13 +20,15 @@ import (
 )
 
 type handler struct {
-	manager rpservice.Manager
+	manager            rpservice.Manager
+	permissionsManager permissions.Manager
 }
 
 // RegisterEndpoints registers all service HTTP endpoints.
 func RegisterEndpoints(manager rpservice.Manager, domainManager domainmanager.Manager, accessLogsManager accesslogs.Manager, permissionsManager permissions.Manager, router *mux.Router) {
 	h := &handler{
-		manager: manager,
+		manager:            manager,
+		permissionsManager: permissionsManager,
 	}
 
 	domainRouter := router.PathPrefix("/reverse-proxies").Subrouter()

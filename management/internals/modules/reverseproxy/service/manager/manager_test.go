@@ -72,7 +72,6 @@ func TestInitializeServiceForCreate(t *testing.T) {
 
 func TestCheckDomainAvailable(t *testing.T) {
 	ctx := context.Background()
-	accountID := "test-account"
 
 	tests := []struct {
 		name             string
@@ -88,7 +87,7 @@ func TestCheckDomainAvailable(t *testing.T) {
 			excludeServiceID: "",
 			setupMock: func(ms *store.MockStore) {
 				ms.EXPECT().
-					GetServiceByDomain(ctx, accountID, "available.com").
+					GetServiceByDomain(ctx, "available.com").
 					Return(nil, status.Errorf(status.NotFound, "not found"))
 			},
 			expectedError: false,
@@ -99,7 +98,7 @@ func TestCheckDomainAvailable(t *testing.T) {
 			excludeServiceID: "",
 			setupMock: func(ms *store.MockStore) {
 				ms.EXPECT().
-					GetServiceByDomain(ctx, accountID, "exists.com").
+					GetServiceByDomain(ctx, "exists.com").
 					Return(&rpservice.Service{ID: "existing-id", Domain: "exists.com"}, nil)
 			},
 			expectedError: true,
@@ -111,7 +110,7 @@ func TestCheckDomainAvailable(t *testing.T) {
 			excludeServiceID: "service-123",
 			setupMock: func(ms *store.MockStore) {
 				ms.EXPECT().
-					GetServiceByDomain(ctx, accountID, "exists.com").
+					GetServiceByDomain(ctx, "exists.com").
 					Return(&rpservice.Service{ID: "service-123", Domain: "exists.com"}, nil)
 			},
 			expectedError: false,
@@ -122,7 +121,7 @@ func TestCheckDomainAvailable(t *testing.T) {
 			excludeServiceID: "service-456",
 			setupMock: func(ms *store.MockStore) {
 				ms.EXPECT().
-					GetServiceByDomain(ctx, accountID, "exists.com").
+					GetServiceByDomain(ctx, "exists.com").
 					Return(&rpservice.Service{ID: "service-123", Domain: "exists.com"}, nil)
 			},
 			expectedError: true,
@@ -134,7 +133,7 @@ func TestCheckDomainAvailable(t *testing.T) {
 			excludeServiceID: "",
 			setupMock: func(ms *store.MockStore) {
 				ms.EXPECT().
-					GetServiceByDomain(ctx, accountID, "error.com").
+					GetServiceByDomain(ctx, "error.com").
 					Return(nil, errors.New("database error"))
 			},
 			expectedError: true,
@@ -150,7 +149,7 @@ func TestCheckDomainAvailable(t *testing.T) {
 			tt.setupMock(mockStore)
 
 			mgr := &Manager{}
-			err := mgr.checkDomainAvailable(ctx, mockStore, accountID, tt.domain, tt.excludeServiceID)
+			err := mgr.checkDomainAvailable(ctx, mockStore, tt.domain, tt.excludeServiceID)
 
 			if tt.expectedError {
 				require.Error(t, err)
@@ -168,7 +167,6 @@ func TestCheckDomainAvailable(t *testing.T) {
 
 func TestCheckDomainAvailable_EdgeCases(t *testing.T) {
 	ctx := context.Background()
-	accountID := "test-account"
 
 	t.Run("empty domain", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
@@ -176,11 +174,11 @@ func TestCheckDomainAvailable_EdgeCases(t *testing.T) {
 
 		mockStore := store.NewMockStore(ctrl)
 		mockStore.EXPECT().
-			GetServiceByDomain(ctx, accountID, "").
+			GetServiceByDomain(ctx, "").
 			Return(nil, status.Errorf(status.NotFound, "not found"))
 
 		mgr := &Manager{}
-		err := mgr.checkDomainAvailable(ctx, mockStore, accountID, "", "")
+		err := mgr.checkDomainAvailable(ctx, mockStore, "", "")
 
 		assert.NoError(t, err)
 	})
@@ -191,11 +189,11 @@ func TestCheckDomainAvailable_EdgeCases(t *testing.T) {
 
 		mockStore := store.NewMockStore(ctrl)
 		mockStore.EXPECT().
-			GetServiceByDomain(ctx, accountID, "test.com").
+			GetServiceByDomain(ctx, "test.com").
 			Return(&rpservice.Service{ID: "some-id", Domain: "test.com"}, nil)
 
 		mgr := &Manager{}
-		err := mgr.checkDomainAvailable(ctx, mockStore, accountID, "test.com", "")
+		err := mgr.checkDomainAvailable(ctx, mockStore, "test.com", "")
 
 		assert.Error(t, err)
 		sErr, ok := status.FromError(err)
@@ -209,11 +207,11 @@ func TestCheckDomainAvailable_EdgeCases(t *testing.T) {
 
 		mockStore := store.NewMockStore(ctrl)
 		mockStore.EXPECT().
-			GetServiceByDomain(ctx, accountID, "nil.com").
+			GetServiceByDomain(ctx, "nil.com").
 			Return(nil, nil)
 
 		mgr := &Manager{}
-		err := mgr.checkDomainAvailable(ctx, mockStore, accountID, "nil.com", "")
+		err := mgr.checkDomainAvailable(ctx, mockStore, "nil.com", "")
 
 		assert.NoError(t, err)
 	})
@@ -241,7 +239,7 @@ func TestPersistNewService(t *testing.T) {
 				// Create another mock for the transaction
 				txMock := store.NewMockStore(ctrl)
 				txMock.EXPECT().
-					GetServiceByDomain(ctx, accountID, "new.com").
+					GetServiceByDomain(ctx, "new.com").
 					Return(nil, status.Errorf(status.NotFound, "not found"))
 				txMock.EXPECT().
 					CreateService(ctx, service).
@@ -272,7 +270,7 @@ func TestPersistNewService(t *testing.T) {
 			DoAndReturn(func(ctx context.Context, fn func(store.Store) error) error {
 				txMock := store.NewMockStore(ctrl)
 				txMock.EXPECT().
-					GetServiceByDomain(ctx, accountID, "existing.com").
+					GetServiceByDomain(ctx, "existing.com").
 					Return(&rpservice.Service{ID: "other-id", Domain: "existing.com"}, nil)
 
 				return fn(txMock)
@@ -425,8 +423,9 @@ func TestDeletePeerService_SourcePeerValidation(t *testing.T) {
 		t.Helper()
 		tokenStore, err := nbgrpc.NewOneTimeTokenStore(context.Background(), 1*time.Hour, 10*time.Minute, 100)
 		require.NoError(t, err)
-		srv := nbgrpc.NewProxyServiceServer(nil, tokenStore, nbgrpc.ProxyOIDCConfig{}, nil, nil, nil)
-		t.Cleanup(srv.Close)
+		pkceStore, err := nbgrpc.NewPKCEVerifierStore(context.Background(), 10*time.Minute, 10*time.Minute, 100)
+		require.NoError(t, err)
+		srv := nbgrpc.NewProxyServiceServer(nil, tokenStore, pkceStore, nbgrpc.ProxyOIDCConfig{}, nil, nil, nil)
 		return srv
 	}
 
@@ -703,8 +702,9 @@ func setupIntegrationTest(t *testing.T) (*Manager, store.Store) {
 
 	tokenStore, err := nbgrpc.NewOneTimeTokenStore(ctx, 1*time.Hour, 10*time.Minute, 100)
 	require.NoError(t, err)
-	proxySrv := nbgrpc.NewProxyServiceServer(nil, tokenStore, nbgrpc.ProxyOIDCConfig{}, nil, nil, nil)
-	t.Cleanup(proxySrv.Close)
+	pkceStore, err := nbgrpc.NewPKCEVerifierStore(ctx, 10*time.Minute, 10*time.Minute, 100)
+	require.NoError(t, err)
+	proxySrv := nbgrpc.NewProxyServiceServer(nil, tokenStore, pkceStore, nbgrpc.ProxyOIDCConfig{}, nil, nil, nil)
 
 	proxyController, err := proxymanager.NewGRPCController(proxySrv, noop.NewMeterProvider().Meter(""))
 	require.NoError(t, err)
@@ -800,8 +800,8 @@ func TestCreateServiceFromPeer(t *testing.T) {
 		mgr, testStore := setupIntegrationTest(t)
 
 		req := &rpservice.ExposeServiceRequest{
-			Port:     8080,
-			Protocol: "http",
+			Port: 8080,
+			Mode: "http",
 		}
 
 		resp, err := mgr.CreateServiceFromPeer(ctx, testAccountID, testPeerID, req)
@@ -811,7 +811,7 @@ func TestCreateServiceFromPeer(t *testing.T) {
 		assert.NotEmpty(t, resp.ServiceURL, "service URL should be set")
 
 		// Verify service is persisted in store
-		persisted, err := testStore.GetServiceByDomain(ctx, testAccountID, resp.Domain)
+		persisted, err := testStore.GetServiceByDomain(ctx, resp.Domain)
 		require.NoError(t, err)
 		assert.Equal(t, resp.Domain, persisted.Domain)
 		assert.Equal(t, rpservice.SourceEphemeral, persisted.Source, "source should be ephemeral")
@@ -823,9 +823,9 @@ func TestCreateServiceFromPeer(t *testing.T) {
 		mgr, _ := setupIntegrationTest(t)
 
 		req := &rpservice.ExposeServiceRequest{
-			Port:     80,
-			Protocol: "http",
-			Domain:   "example.com",
+			Port:   80,
+			Mode:   "http",
+			Domain: "example.com",
 		}
 
 		resp, err := mgr.CreateServiceFromPeer(ctx, testAccountID, testPeerID, req)
@@ -844,8 +844,8 @@ func TestCreateServiceFromPeer(t *testing.T) {
 		require.NoError(t, err)
 
 		req := &rpservice.ExposeServiceRequest{
-			Port:     8080,
-			Protocol: "http",
+			Port: 8080,
+			Mode: "http",
 		}
 
 		_, err = mgr.CreateServiceFromPeer(ctx, testAccountID, testPeerID, req)
@@ -857,8 +857,8 @@ func TestCreateServiceFromPeer(t *testing.T) {
 		mgr, _ := setupIntegrationTest(t)
 
 		req := &rpservice.ExposeServiceRequest{
-			Port:     0,
-			Protocol: "http",
+			Port: 0,
+			Mode: "http",
 		}
 
 		_, err := mgr.CreateServiceFromPeer(ctx, testAccountID, testPeerID, req)
@@ -875,62 +875,52 @@ func TestExposeServiceRequestValidate(t *testing.T) {
 	}{
 		{
 			name:    "valid http request",
-			req:     rpservice.ExposeServiceRequest{Port: 8080, Protocol: "http"},
+			req:     rpservice.ExposeServiceRequest{Port: 8080, Mode: "http"},
 			wantErr: "",
 		},
 		{
-			name:    "valid https request with pin",
-			req:     rpservice.ExposeServiceRequest{Port: 443, Protocol: "https", Pin: "123456"},
-			wantErr: "",
+			name:    "https mode rejected",
+			req:     rpservice.ExposeServiceRequest{Port: 443, Mode: "https", Pin: "123456"},
+			wantErr: "unsupported mode",
 		},
 		{
 			name:    "port zero rejected",
-			req:     rpservice.ExposeServiceRequest{Port: 0, Protocol: "http"},
+			req:     rpservice.ExposeServiceRequest{Port: 0, Mode: "http"},
 			wantErr: "port must be between 1 and 65535",
 		},
 		{
-			name:    "negative port rejected",
-			req:     rpservice.ExposeServiceRequest{Port: -1, Protocol: "http"},
-			wantErr: "port must be between 1 and 65535",
-		},
-		{
-			name:    "port above 65535 rejected",
-			req:     rpservice.ExposeServiceRequest{Port: 65536, Protocol: "http"},
-			wantErr: "port must be between 1 and 65535",
-		},
-		{
-			name:    "unsupported protocol",
-			req:     rpservice.ExposeServiceRequest{Port: 80, Protocol: "tcp"},
-			wantErr: "unsupported protocol",
+			name:    "unsupported mode",
+			req:     rpservice.ExposeServiceRequest{Port: 80, Mode: "ftp"},
+			wantErr: "unsupported mode",
 		},
 		{
 			name:    "invalid pin format",
-			req:     rpservice.ExposeServiceRequest{Port: 80, Protocol: "http", Pin: "abc"},
+			req:     rpservice.ExposeServiceRequest{Port: 80, Mode: "http", Pin: "abc"},
 			wantErr: "invalid pin",
 		},
 		{
 			name:    "pin too short",
-			req:     rpservice.ExposeServiceRequest{Port: 80, Protocol: "http", Pin: "12345"},
+			req:     rpservice.ExposeServiceRequest{Port: 80, Mode: "http", Pin: "12345"},
 			wantErr: "invalid pin",
 		},
 		{
 			name:    "valid 6-digit pin",
-			req:     rpservice.ExposeServiceRequest{Port: 80, Protocol: "http", Pin: "000000"},
+			req:     rpservice.ExposeServiceRequest{Port: 80, Mode: "http", Pin: "000000"},
 			wantErr: "",
 		},
 		{
 			name:    "empty user group name",
-			req:     rpservice.ExposeServiceRequest{Port: 80, Protocol: "http", UserGroups: []string{"valid", ""}},
+			req:     rpservice.ExposeServiceRequest{Port: 80, Mode: "http", UserGroups: []string{"valid", ""}},
 			wantErr: "user group name cannot be empty",
 		},
 		{
 			name:    "invalid name prefix",
-			req:     rpservice.ExposeServiceRequest{Port: 80, Protocol: "http", NamePrefix: "INVALID"},
+			req:     rpservice.ExposeServiceRequest{Port: 80, Mode: "http", NamePrefix: "INVALID"},
 			wantErr: "invalid name prefix",
 		},
 		{
 			name:    "valid name prefix",
-			req:     rpservice.ExposeServiceRequest{Port: 80, Protocol: "http", NamePrefix: "my-service"},
+			req:     rpservice.ExposeServiceRequest{Port: 80, Mode: "http", NamePrefix: "my-service"},
 			wantErr: "",
 		},
 	}
@@ -963,32 +953,33 @@ func TestDeleteServiceFromPeer_ByDomain(t *testing.T) {
 
 		// First create a service
 		req := &rpservice.ExposeServiceRequest{
-			Port:     8080,
-			Protocol: "http",
+			Port: 8080,
+			Mode: "http",
 		}
 		resp, err := mgr.CreateServiceFromPeer(ctx, testAccountID, testPeerID, req)
 		require.NoError(t, err)
 
-		// Delete by domain using unexported method
-		err = mgr.deleteServiceFromPeer(ctx, testAccountID, testPeerID, resp.Domain, false)
+		svcID := resolveServiceIDByDomain(t, testStore, resp.Domain)
+		err = mgr.deleteServiceFromPeer(ctx, testAccountID, testPeerID, svcID, false)
 		require.NoError(t, err)
 
 		// Verify service is deleted
-		_, err = testStore.GetServiceByDomain(ctx, testAccountID, resp.Domain)
+		_, err = testStore.GetServiceByDomain(ctx, resp.Domain)
 		require.Error(t, err, "service should be deleted")
 	})
 
 	t.Run("expire uses correct activity", func(t *testing.T) {
-		mgr, _ := setupIntegrationTest(t)
+		mgr, testStore := setupIntegrationTest(t)
 
 		req := &rpservice.ExposeServiceRequest{
-			Port:     8080,
-			Protocol: "http",
+			Port: 8080,
+			Mode: "http",
 		}
 		resp, err := mgr.CreateServiceFromPeer(ctx, testAccountID, testPeerID, req)
 		require.NoError(t, err)
 
-		err = mgr.deleteServiceFromPeer(ctx, testAccountID, testPeerID, resp.Domain, true)
+		svcID := resolveServiceIDByDomain(t, testStore, resp.Domain)
+		err = mgr.deleteServiceFromPeer(ctx, testAccountID, testPeerID, svcID, true)
 		require.NoError(t, err)
 	})
 }
@@ -1000,16 +991,17 @@ func TestStopServiceFromPeer(t *testing.T) {
 		mgr, testStore := setupIntegrationTest(t)
 
 		req := &rpservice.ExposeServiceRequest{
-			Port:     8080,
-			Protocol: "http",
+			Port: 8080,
+			Mode: "http",
 		}
 		resp, err := mgr.CreateServiceFromPeer(ctx, testAccountID, testPeerID, req)
 		require.NoError(t, err)
 
-		err = mgr.StopServiceFromPeer(ctx, testAccountID, testPeerID, resp.Domain)
+		svcID := resolveServiceIDByDomain(t, testStore, resp.Domain)
+		err = mgr.StopServiceFromPeer(ctx, testAccountID, testPeerID, svcID)
 		require.NoError(t, err)
 
-		_, err = testStore.GetServiceByDomain(ctx, testAccountID, resp.Domain)
+		_, err = testStore.GetServiceByDomain(ctx, resp.Domain)
 		require.Error(t, err, "service should be deleted")
 	})
 }
@@ -1019,8 +1011,8 @@ func TestDeleteService_DeletesEphemeralExpose(t *testing.T) {
 	mgr, testStore := setupIntegrationTest(t)
 
 	resp, err := mgr.CreateServiceFromPeer(ctx, testAccountID, testPeerID, &rpservice.ExposeServiceRequest{
-		Port:     8080,
-		Protocol: "http",
+		Port: 8080,
+		Mode: "http",
 	})
 	require.NoError(t, err)
 
@@ -1028,7 +1020,7 @@ func TestDeleteService_DeletesEphemeralExpose(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), count, "one ephemeral service should exist after create")
 
-	svc, err := testStore.GetServiceByDomain(ctx, testAccountID, resp.Domain)
+	svc, err := testStore.GetServiceByDomain(ctx, resp.Domain)
 	require.NoError(t, err)
 
 	err = mgr.DeleteService(ctx, testAccountID, testUserID, svc.ID)
@@ -1039,8 +1031,8 @@ func TestDeleteService_DeletesEphemeralExpose(t *testing.T) {
 	assert.Equal(t, int64(0), count, "ephemeral service should be deleted after API delete")
 
 	_, err = mgr.CreateServiceFromPeer(ctx, testAccountID, testPeerID, &rpservice.ExposeServiceRequest{
-		Port:     9090,
-		Protocol: "http",
+		Port: 9090,
+		Mode: "http",
 	})
 	assert.NoError(t, err, "new expose should succeed after API delete")
 }
@@ -1051,8 +1043,8 @@ func TestDeleteAllServices_DeletesEphemeralExposes(t *testing.T) {
 
 	for i := range 3 {
 		_, err := mgr.CreateServiceFromPeer(ctx, testAccountID, testPeerID, &rpservice.ExposeServiceRequest{
-			Port:     8080 + i,
-			Protocol: "http",
+			Port: uint16(8080 + i),
+			Mode: "http",
 		})
 		require.NoError(t, err)
 	}
@@ -1073,21 +1065,22 @@ func TestRenewServiceFromPeer(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("renews tracked expose", func(t *testing.T) {
-		mgr, _ := setupIntegrationTest(t)
+		mgr, testStore := setupIntegrationTest(t)
 
 		resp, err := mgr.CreateServiceFromPeer(ctx, testAccountID, testPeerID, &rpservice.ExposeServiceRequest{
-			Port:     8080,
-			Protocol: "http",
+			Port: 8080,
+			Mode: "http",
 		})
 		require.NoError(t, err)
 
-		err = mgr.RenewServiceFromPeer(ctx, testAccountID, testPeerID, resp.Domain)
+		svcID := resolveServiceIDByDomain(t, testStore, resp.Domain)
+		err = mgr.RenewServiceFromPeer(ctx, testAccountID, testPeerID, svcID)
 		require.NoError(t, err)
 	})
 
 	t.Run("fails for untracked domain", func(t *testing.T) {
 		mgr, _ := setupIntegrationTest(t)
-		err := mgr.RenewServiceFromPeer(ctx, testAccountID, testPeerID, "nonexistent.com")
+		err := mgr.RenewServiceFromPeer(ctx, testAccountID, testPeerID, "nonexistent-service-id")
 		require.Error(t, err)
 	})
 }
@@ -1132,8 +1125,9 @@ func TestDeleteService_DeletesTargets(t *testing.T) {
 
 	tokenStore, err := nbgrpc.NewOneTimeTokenStore(ctx, 1*time.Hour, 10*time.Minute, 100)
 	require.NoError(t, err)
-	proxySrv := nbgrpc.NewProxyServiceServer(nil, tokenStore, nbgrpc.ProxyOIDCConfig{}, nil, nil, nil)
-	t.Cleanup(proxySrv.Close)
+	pkceStore, err := nbgrpc.NewPKCEVerifierStore(ctx, 10*time.Minute, 10*time.Minute, 100)
+	require.NoError(t, err)
+	proxySrv := nbgrpc.NewProxyServiceServer(nil, tokenStore, pkceStore, nbgrpc.ProxyOIDCConfig{}, nil, nil, nil)
 
 	proxyController, err := proxymanager.NewGRPCController(proxySrv, noop.NewMeterProvider().Meter(""))
 	require.NoError(t, err)
@@ -1181,4 +1175,34 @@ func TestDeleteService_DeletesTargets(t *testing.T) {
 	targets, err := sqlStore.GetTargetsByServiceID(ctx, store.LockingStrengthNone, accountID, service.ID)
 	require.NoError(t, err)
 	assert.Len(t, targets, 0, "All targets should be deleted when service is deleted")
+}
+
+func TestValidateProtocolChange(t *testing.T) {
+	tests := []struct {
+		name    string
+		oldP    string
+		newP    string
+		wantErr bool
+	}{
+		{"empty to http", "", "http", false},
+		{"http to http", "http", "http", false},
+		{"same protocol", "tcp", "tcp", false},
+		{"empty new proto", "tcp", "", false},
+		{"http to tcp", "http", "tcp", true},
+		{"tcp to udp", "tcp", "udp", true},
+		{"tls to http", "tls", "http", true},
+		{"udp to tls", "udp", "tls", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateProtocolChange(tt.oldP, tt.newP)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "cannot change mode")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }

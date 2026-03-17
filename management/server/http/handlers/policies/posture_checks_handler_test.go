@@ -26,18 +26,6 @@ import (
 var berlin = "Berlin"
 var losAngeles = "Los Angeles"
 
-// wrapHandler wraps a handler function that requires userAuth parameter
-func wrapHandler(h func(w http.ResponseWriter, r *http.Request, userAuth *auth.UserAuth)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		userAuth, err := nbcontext.GetUserAuthFromContext(r.Context())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusUnauthorized)
-			return
-		}
-		h(w, r, userAuth)
-	}
-}
-
 func initPostureChecksTestData(postureChecks ...*posture.Checks) *postureChecksHandler {
 	testPostureChecks := make(map[string]*posture.Checks, len(postureChecks))
 	for _, postureCheck := range postureChecks {

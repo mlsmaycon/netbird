@@ -203,13 +203,13 @@ func startServer(
 		AnyTimes()
 
 	permissionsManager := permissions.NewManager(str)
-	peersManager := peers.NewManager(str, permissionsManager)
+	peersManager := peers.NewManager(str)
 	jobManager := job.NewJobManager(nil, str, peersManager)
 
 	ctx := context.Background()
 	updateManager := update_channel.NewPeersUpdateManager(metrics)
 	requestBuffer := server.NewAccountRequestBuffer(ctx, str)
-	networkMapController := controller.NewController(ctx, str, metrics, updateManager, requestBuffer, server.MockIntegratedValidator{}, settingsMockManager, "netbird.selfhosted", port_forwarding.NewControllerMock(), ephemeral_manager.NewEphemeralManager(str, peers.NewManager(str, permissionsManager)), config)
+	networkMapController := controller.NewController(ctx, str, metrics, updateManager, requestBuffer, server.MockIntegratedValidator{}, settingsMockManager, "netbird.selfhosted", port_forwarding.NewControllerMock(), ephemeral_manager.NewEphemeralManager(str, peers.NewManager(str)), config)
 
 	accountManager, err := server.BuildManager(
 		context.Background(),
@@ -232,7 +232,7 @@ func startServer(
 		t.Fatalf("failed creating an account manager: %v", err)
 	}
 
-	groupsManager := groups.NewManager(str, permissionsManager, accountManager)
+	groupsManager := groups.NewManager(str, accountManager)
 	secretsManager, err := nbgrpc.NewTimeBasedAuthSecretsManager(updateManager, config.TURNConfig, config.Relay, settingsMockManager, groupsManager)
 	if err != nil {
 		t.Fatalf("failed creating secrets manager: %v", err)

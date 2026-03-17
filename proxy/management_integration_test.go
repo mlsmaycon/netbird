@@ -116,6 +116,9 @@ func setupIntegrationTest(t *testing.T) *integrationTestSetup {
 	tokenStore, err := nbgrpc.NewOneTimeTokenStore(ctx, 5*time.Minute, 10*time.Minute, 100)
 	require.NoError(t, err)
 
+	pkceStore, err := nbgrpc.NewPKCEVerifierStore(ctx, 10*time.Minute, 10*time.Minute, 100)
+	require.NoError(t, err)
+
 	// Create real users manager
 	usersManager := users.NewManager(testStore)
 
@@ -131,6 +134,7 @@ func setupIntegrationTest(t *testing.T) *integrationTestSetup {
 	proxyService := nbgrpc.NewProxyServiceServer(
 		&testAccessLogManager{},
 		tokenStore,
+		pkceStore,
 		oidcConfig,
 		nil,
 		usersManager,
@@ -236,6 +240,10 @@ func (c *testProxyController) UnregisterProxyFromCluster(_ context.Context, _, _
 }
 
 func (c *testProxyController) GetProxiesForCluster(_ string) []string {
+	return nil
+}
+
+func (c *testProxyController) ClusterSupportsCustomPorts(_ string) *bool {
 	return nil
 }
 
@@ -482,7 +490,7 @@ func TestIntegration_ProxyConnection_ReconnectDoesNotDuplicateState(t *testing.T
 	logger := log.New()
 	logger.SetLevel(log.WarnLevel)
 
-	authMw := auth.NewMiddleware(logger, nil)
+	authMw := auth.NewMiddleware(logger, nil, nil)
 	proxyHandler := proxy.NewReverseProxy(nil, "auto", nil, logger)
 
 	clusterAddress := "test.proxy.io"
@@ -501,15 +509,16 @@ func TestIntegration_ProxyConnection_ReconnectDoesNotDuplicateState(t *testing.T
 					nil,
 					"",
 					0,
-					mapping.GetAccountId(),
-					mapping.GetId(),
+					proxytypes.AccountID(mapping.GetAccountId()),
+					proxytypes.ServiceID(mapping.GetId()),
+					nil,
 				)
 				require.NoError(t, err)
 
 				// Apply to real proxy (idempotent)
 				proxyHandler.AddMapping(proxy.Mapping{
 					Host:      mapping.GetDomain(),
-					ID:        mapping.GetId(),
+					ID:        proxytypes.ServiceID(mapping.GetId()),
 					AccountID: proxytypes.AccountID(mapping.GetAccountId()),
 				})
 			}
