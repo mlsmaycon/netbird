@@ -1,105 +1,208 @@
 # Migrating from External IdP to Embedded IdP
 
-This guide walks through migrating a self-hosted NetBird deployment from an external identity provider (Auth0, Zitadel, Okta, Azure AD, Google, Keycloak, Authentik, PocketID) to the embedded Dex-based IdP introduced in v0.60.0.
+This guide walks through migrating a self-hosted NetBird deployment from an external identity provider to the embedded Dex-based IdP introduced in v0.60.0.
 
-## What the migration does
+## Overview
 
-1. **Re-encodes user IDs** in the database so they include the external connector ID. This lets Dex route returning users back to the correct external provider.
-2. **Generates a new management.json** that replaces `IdpManagerConfig` with `EmbeddedIdP` and updates the `HttpConfig` OAuth2 endpoints to point at the embedded Dex issuer.
+The migration tool does two things:
 
-Existing users keep logging in through the same external provider — Dex acts as a broker in front of it. No passwords or credentials change.
+1. **Re-encodes user IDs** in the database to include the external connector ID, so Dex can route returning users to the correct external provider.
+2. **Generates a new `management.json`** that replaces `IdpManagerConfig` with `EmbeddedIdP` and updates OAuth2 endpoints to the embedded Dex issuer.
 
-## Prerequisites
+After migration, existing users keep logging in through the same external provider — Dex acts as a broker in front of it. No passwords or credentials change.
 
-- NetBird **v0.60.0 or later** binaries (management server, or combined server).
-- Access to the management server host and its `management.json`.
-- The management server **must be stopped** while the migration runs (the tool writes directly to the database).
-- A backup of your database and config (the tool creates `management.json.bak`, but you should have your own backup too).
+---
 
-## Supported identity providers
+## Before You Begin
 
-| Provider | Auto-detected | Notes |
-|----------|:---:|-------|
-| Auth0 | Yes | Maps to generic OIDC connector |
-| Azure AD | Yes | Maps to Entra connector |
-| Keycloak | Yes | |
-| Okta | Yes | |
-| Authentik | Yes | |
-| PocketID | Yes | |
-| Google | Yes | |
-| Zitadel | No | Requires `--idp-seed-info` — see [Zitadel setup](#zitadel) below |
-| JumpCloud | No | No Dex connector available — manual setup required |
+### Prerequisites
 
-Providers marked "No" for auto-detection require you to supply a connector via `--idp-seed-info`. The tool will print step-by-step instructions when it detects one of these providers.
+| Requirement | Details |
+|-------------|---------|
+| NetBird version | `<INSERT_VERSION>` or later |
+| Config access | You can read and write `management.json` |
+| Server downtime | The management server **must be stopped** during migration |
+| Backups | Back up your database and config before starting |
 
-## Step-by-step
+### Supported Providers
 
-### 1. Get the tool
+| Provider | Auto-detected | Connector type | Extra setup needed? |
+|----------|:---:|----------------|---------------------|
+| Auth0 | ✅ | Generic OIDC | No |
+| Azure AD | ✅ | Entra | No |
+| Keycloak | ✅ | Keycloak | No |
+| Okta | ✅ | OIDC | No |
+| Authentik | ✅ | OIDC | No |
+| PocketID | ✅ | OIDC | No |
+| Google | ✅ | Google | No |
+| Zitadel | ❌ | Zitadel | Yes — see [Step 2](#step-2-prepare-your-provider-if-required) |
+| JumpCloud | ❌ | — | No Dex connector; manual OIDC setup required |
 
-**Option A: Download a pre-built binary** from the GitHub Releases page.
+> **Which path do I follow?**
+>
+> - **Auto-detected provider** → Skip Step 2 entirely. The tool reads your `management.json` and builds the connector automatically.
+> - **Zitadel** → You must complete Step 2 to create an OAuth app and supply connector credentials.
+> - **JumpCloud or other unsupported provider** → You must complete Step 2 to provide a custom OIDC connector.
 
-Each release includes `netbird-idp-migrate` archives for Linux (amd64, arm64, arm). Download the one matching your management server's architecture:
+---
+
+## Step 1: Get the Migration Tool
+
+**Option A — Download a pre-built binary:**
 
 ```bash
-# Example for linux/amd64 — replace VERSION with the release tag
+# Replace VERSION with the release tag, and adjust the architecture as needed
 curl -L -o netbird-idp-migrate.tar.gz \
   https://github.com/netbirdio/netbird/releases/download/VERSION/netbird-idp-migrate_VERSION_linux_amd64.tar.gz
 tar xzf netbird-idp-migrate.tar.gz
 chmod +x netbird-idp-migrate
 ```
 
-**Option B: Build from source** (requires Go 1.25+ and a C compiler for CGO/SQLite):
+Available architectures: `linux_amd64`, `linux_arm64`, `linux_arm`.
+
+**Option B — Build from source** (requires Go 1.25+ and a C compiler for CGO/SQLite):
 
 ```bash
 go build -o netbird-idp-migrate ./tools/idp-migrate/
 ```
 
-Copy the binary to the management server host if building remotely.
+Copy the binary to the management server host if you built it elsewhere.
 
-### 2. Stop the management server
+---
 
-```bash
-# systemd
-sudo systemctl stop netbird-management
+## Step 2: Prepare Your Provider (if required)
 
-# docker compose
-docker compose stop management
+> **Auto-detected providers (Auth0, Azure AD, Keycloak, Okta, Authentik, PocketID, Google):** Skip this step — proceed to [Step 3](#step-3-stop-the-management-server).
+
+### Zitadel
+
+Zitadel requires manual connector setup because the management server's service account credentials cannot be reused as OAuth client credentials for the Dex OIDC connector.
+
+1. Open the Zitadel console at `https://<your-zitadel-domain>/ui/console`.
+2. Go to **Projects** → select the NetBird project → **Applications**.
+3. Click **New** and create an application:
+   - **Name:** `netbird-dex`
+   - **Type:** Web
+   - **Authentication Method:** Code
+4. Set the redirect URI to `https://<your-management-domain>/oauth2/callback`.
+5. Save and copy the **Client ID** and **Client Secret**.
+6. Under **Token Settings**, enable both:
+   - ✅ User roles inside ID token
+   - ✅ User Info inside ID token
+7. Create a `connector.json` file:
+
+   ```json
+   {
+     "type": "zitadel",
+     "name": "zitadel",
+     "id": "zitadel",
+     "config": {
+       "issuer": "https://<your-zitadel-domain>",
+       "clientID": "<client-id>",
+       "clientSecret": "<client-secret>",
+       "redirectURI": "https://<your-management-domain>/oauth2/callback"
+     }
+   }
+   ```
+
+You will pass this file in Step 5 with the `--idp-seed-info` flag.
+
+See also: [Zitadel setup guide](https://docs.netbird.io/selfhosted/identity-providers/zitadel).
+
+### Custom / Unsupported Provider (JumpCloud, etc.)
+
+For providers without built-in detection, create a generic OIDC `connector.json`:
+
+```json
+{
+  "type": "oidc",
+  "name": "My Provider",
+  "id": "my-provider",
+  "config": {
+    "issuer": "https://idp.example.com",
+    "clientID": "my-client-id",
+    "clientSecret": "my-client-secret",
+    "redirectURI": "https://<your-management-domain>/oauth2/callback"
+  }
+}
 ```
 
-### 3. Back up your data
+You will pass this file in Step 5 with the `--idp-seed-info` flag.
 
-**Systemd / bare-metal** (database on the host filesystem):
+---
+
+## Step 3: Stop the Management Server
+
+<details>
+<summary><strong>Systemd / bare-metal</strong></summary>
+
+```bash
+sudo systemctl stop netbird-management
+```
+</details>
+
+<details>
+<summary><strong>Docker Compose</strong></summary>
+
+```bash
+docker compose stop management
+```
+</details>
+
+---
+
+## Step 4: Back Up Your Data
+
+The tool creates `management.json.bak` automatically, but always make your own backups.
+
+<details>
+<summary><strong>Systemd / bare-metal (SQLite)</strong></summary>
 
 ```bash
 cp /var/lib/netbird/store.db /var/lib/netbird/store.db.bak
 cp /etc/netbird/management.json /etc/netbird/management.json.bak
 ```
+</details>
 
-**Docker Compose** (database inside a named volume):
+<details>
+<summary><strong>Docker Compose (SQLite in a named volume)</strong></summary>
 
-The default `docker-compose.yml` stores the database in a Docker volume mounted at `/var/lib/netbird` inside the management container. The volume name varies by setup (e.g. `netbird_management`, `netbird_netbird_management`, `netbird_data`). To find it:
+Find the volume and its host path:
 
 ```bash
-# Find the volume that holds store.db
-docker volume ls --format '{{ .Name }}' | grep -i management
-# Then inspect to get the host path
-docker volume inspect <volume-name> --format '{{ .Mountpoint }}'
-# e.g. /var/lib/docker/volumes/netbird_management/_data
+# Identify the volume name
+VOLUME_NAME=$(docker volume ls --format '{{ .Name }}' | grep -i management)
+echo "Volume: $VOLUME_NAME"
 
-# Verify store.db is there
-sudo ls /var/lib/docker/volumes/<volume-name>/_data/
+# Get the host path
+VOLUME_PATH=$(docker volume inspect "$VOLUME_NAME" --format '{{ .Mountpoint }}')
+echo "Path: $VOLUME_PATH"
 
-# Back up
-sudo cp /var/lib/docker/volumes/<volume-name>/_data/store.db \
-        /var/lib/docker/volumes/<volume-name>/_data/store.db.bak
+# Verify store.db exists, then back up
+sudo ls "$VOLUME_PATH/store.db"
+sudo cp "$VOLUME_PATH/store.db" "$VOLUME_PATH/store.db.bak"
 cp ~/netbird/management.json ~/netbird/management.json.bak
 ```
+</details>
 
-**PostgreSQL**: use `pg_dump` instead of copying `store.db`.
+<details>
+<summary><strong>PostgreSQL</strong></summary>
 
-### 4. Dry run
+```bash
+pg_dump -h <host> -U <user> -d <database> -f netbird-backup.sql
+cp /etc/netbird/management.json /etc/netbird/management.json.bak
+```
+</details>
 
-Always do a dry run first. This previews what would happen without writing anything:
+---
+
+## Step 5: Run the Migration
+
+### 5a. Dry run (always do this first)
+
+This previews what will happen without writing any changes.
+
+**Auto-detected providers:**
 
 ```bash
 ./netbird-idp-migrate \
@@ -107,12 +210,29 @@ Always do a dry run first. This previews what would happen without writing anyth
   --dry-run
 ```
 
+**Zitadel / custom providers** (pass the `connector.json` from Step 2):
+
+```bash
+./netbird-idp-migrate \
+  --config /etc/netbird/management.json \
+  --idp-seed-info "$(base64 < connector.json)" \
+  --dry-run
+```
+
+> **Docker users:** If your database is in a volume that doesn't match the `Datadir` in `management.json`, add `--datadir`:
+>
+> ```bash
+> ./netbird-idp-migrate \
+>   --config ~/netbird/management.json \
+>   --datadir /var/lib/docker/volumes/<volume-name>/_data \
+>   --dry-run
+> ```
+
 You should see output like:
 
 ```
-INFO resolved connector: type=zitadel, id=zitadel, name=zitadel
+INFO resolved connector: type=oidc, id=auth0, name=auth0
 INFO found 12 total users: 12 pending migration, 0 already migrated
-INFO [DRY RUN] migration dry-run mode enabled, no changes will be written
 INFO [DRY RUN] would migrate user abc123 -> CgZhYmMxMjMSB3ppdGFkZWw (account: acct-1)
 ...
 INFO [DRY RUN] migration summary: 12 users would be migrated, 0 already migrated
@@ -121,63 +241,71 @@ INFO [DRY RUN] new management.json would be:
 { ... }
 ```
 
-Check that:
-- The connector type and ID look correct for your provider.
-- The user count matches what you expect.
-- The generated config has the right domain and endpoints.
+**Verify before proceeding:**
 
-### 5. Run the migration
+- ✅ Connector type and ID match your provider.
+- ✅ User count matches what you expect.
+- ✅ Generated config has the correct domain and endpoints.
+
+### 5b. Execute the migration
+
+Run the same command without `--dry-run`:
 
 ```bash
+# Auto-detected providers
+./netbird-idp-migrate --config /etc/netbird/management.json
+
+# Zitadel / custom providers
 ./netbird-idp-migrate \
-  --config /etc/netbird/management.json
+  --config /etc/netbird/management.json \
+  --idp-seed-info "$(base64 < connector.json)"
 ```
 
-The tool will show a summary and ask for confirmation:
+The tool will show a summary and prompt for confirmation:
 
 ```
 About to migrate 12 users. This cannot be easily undone. Continue? [y/N]
 ```
 
-Type `y` and press Enter. You should see:
+Type `y` and press Enter.
 
-```
-INFO DB migration completed successfully
-INFO derived domain for embedded IdP: mgmt.example.com
-INFO backed up original config to /etc/netbird/management.json.bak
-INFO wrote new config to /etc/netbird/management.json
-```
-
-### 6. Review the new config
+### 5c. Review the new config
 
 Open `/etc/netbird/management.json` and verify:
 
-- `IdpManagerConfig` is gone.
-- `EmbeddedIdP` is present with `"Enabled": true` and your connector in `StaticConnectors`.
-- `HttpConfig.AuthIssuer` points to `https://<your-domain>/oauth2`.
-- `HttpConfig.AuthClientID` is `"netbird-dashboard"`.
+- ✅ `IdpManagerConfig` is **removed**.
+- ✅ `EmbeddedIdP` is present with `"Enabled": true` and your connector in `StaticConnectors`.
+- ✅ `HttpConfig.AuthIssuer` is `https://<your-domain>/oauth2`.
+- ✅ `HttpConfig.AuthClientID` is `"netbird-dashboard"`.
 
-### 7. Update your reverse proxy
+---
 
-The embedded Dex IdP is served by the management server under the `/oauth2/` path. If your setup uses a reverse proxy (Caddy, nginx, Traefik, etc.) in front of the management server, you **must** add a route for `/oauth2/*` so that OIDC discovery and the login flow work.
+## Step 6: Post-Migration Configuration
 
-**Caddy** (getting-started.sh setups use this):
+### 6a. Update your reverse proxy
 
-Add the following to your `Caddyfile`, inside the site block for your management domain:
+The embedded Dex IdP is served under `/oauth2/`. Your reverse proxy must route this path to the management server.
+
+<details>
+<summary><strong>Caddy</strong></summary>
+
+Add to your `Caddyfile`, inside the site block for your management domain:
 
 ```
 reverse_proxy /oauth2/* management:80
 ```
 
-Place it alongside the existing `reverse_proxy /api/* management:80` and `reverse_proxy /management.ManagementService/* management:80` routes. Then reload Caddy:
+Place it alongside existing `/api/*` and `/management.ManagementService/*` routes, then reload:
 
 ```bash
 docker compose restart caddy
 # or
 sudo systemctl reload caddy
 ```
+</details>
 
-**nginx:**
+<details>
+<summary><strong>Nginx</strong></summary>
 
 ```nginx
 location /oauth2/ {
@@ -189,48 +317,66 @@ location /oauth2/ {
 }
 ```
 
-**Verify** the route is working before proceeding:
+Reload nginx after adding the route.
+</details>
+
+<details>
+<summary><strong>Traefik</strong></summary>
+
+Add a route matching the `/oauth2/` path prefix, forwarding to the management service.
+</details>
+
+**Verify the route works:**
 
 ```bash
 curl -s https://<your-domain>/oauth2/.well-known/openid-configuration | head -5
 ```
 
-You should see a JSON response with `"issuer": "https://<your-domain>/oauth2"`.
+Expected: a JSON response with `"issuer": "https://<your-domain>/oauth2"`.
 
-### 8. Update dashboard.env
+### 6b. Update dashboard environment
 
-If your dashboard uses a separate `dashboard.env` or environment variables for authentication, update these to point to the embedded Dex IdP:
+If your dashboard uses a separate `dashboard.env` or environment variables, update the OAuth settings:
 
 ```bash
-# Before (pointing to external IdP):
+# Before (external IdP)
 AUTH_AUTHORITY=https://external-idp.example.com
 AUTH_CLIENT_ID=old-client-id
 AUTH_AUDIENCE=old-audience
 
-# After (pointing to embedded Dex):
+# After (embedded Dex)
 AUTH_AUTHORITY=https://<your-domain>/oauth2
 AUTH_CLIENT_ID=netbird-dashboard
 AUTH_AUDIENCE=netbird-dashboard
 ```
 
-Then restart the dashboard container or service.
+Restart the dashboard after updating.
 
-### 9. Start the management server
+---
+
+## Step 7: Start and Verify
+
+### Start the management server
 
 ```bash
+# Systemd
 sudo systemctl start netbird-management
-# or
+
+# Docker Compose
 docker compose up -d management
 ```
 
-### 10. Verify
+### Verify everything works
 
-- Open the OIDC discovery endpoint: `https://<your-domain>/oauth2/.well-known/openid-configuration` — it should return valid JSON.
-- Log into the dashboard — you should be redirected through your external IdP as before.
-- Check that peers are visible and policies are intact.
-- **Important**: Use an incognito/private browser window or clear cookies for your first login. Stale tokens from the old IdP will fail validation.
+1. **OIDC discovery:** Open `https://<your-domain>/oauth2/.well-known/openid-configuration` — it should return valid JSON.
+2. **Dashboard login:** Log in to the dashboard — you should be redirected through your external IdP as before.
+3. **Data integrity:** Check that peers are visible and policies are intact.
 
-## Command reference
+> **Tip:** Use an incognito/private browser window or clear cookies for your first login. Stale tokens from the old IdP will fail validation.
+
+---
+
+## Command Reference
 
 ```
 Usage: netbird-idp-migrate [flags]
@@ -245,9 +391,13 @@ Flags:
   --log-level string     Log level: debug, info, warn, error (default "info")
 ```
 
-## Common scenarios
+---
 
-### DB-only migration (you'll edit config manually)
+## Advanced Scenarios
+
+### DB-only migration (manual config editing)
+
+Migrate user IDs in the database but skip config generation:
 
 ```bash
 ./netbird-idp-migrate \
@@ -255,85 +405,7 @@ Flags:
   --skip-config
 ```
 
-### Custom data directory
-
-If your database lives somewhere other than what `Datadir` says in management.json (common with Docker volume mounts):
-
-```bash
-# Bare-metal with a non-default path
-./netbird-idp-migrate \
-  --config /etc/netbird/management.json \
-  --datadir /custom/path/to/data
-
-# Docker — point to the volume's host path (see step 3 to find it)
-./netbird-idp-migrate \
-  --config ~/netbird/management.json \
-  --datadir /var/lib/docker/volumes/<volume-name>/_data
-```
-
-### Zitadel
-
-Zitadel auto-detection is not supported because the management server uses service account credentials that cannot work as OAuth client credentials for the Dex OIDC connector. You need to create a new confidential OAuth application in Zitadel:
-
-1. Open the Zitadel console at `https://<your-domain>/ui/console` (for getting-started.sh setups, Zitadel shares the same domain as NetBird).
-2. Navigate to **Projects** → select the NetBird project → **Applications**.
-3. Click **New** to create an application:
-   - **Name**: `netbird-dex`
-   - **Type**: Web
-   - **Authentication Method**: POST (sends client_id + client_secret in request body)
-4. Add redirect URI: `https://<your-management-domain>/oauth2/callback`
-5. Save and copy the generated **Client ID** and **Client Secret**.
-6. Create a `connector.json` file:
-
-```json
-{
-  "type": "zitadel",
-  "name": "zitadel",
-  "id": "zitadel",
-  "config": {
-    "issuer": "https://<your-zitadel-domain>",
-    "clientID": "<client-id-from-step-5>",
-    "clientSecret": "<client-secret-from-step-5>",
-    "redirectURI": "https://<your-management-domain>/oauth2/callback"
-  }
-}
-```
-
-7. Run the migration with `--idp-seed-info`:
-
-```bash
-./netbird-idp-migrate \
-  --config /etc/netbird/management.json \
-  --idp-seed-info "$(base64 < connector.json)"
-```
-
-### Explicit connector (skip auto-detection)
-
-If auto-detection doesn't work or you want full control, provide the connector as base64-encoded JSON:
-
-```bash
-# Create the connector JSON
-cat <<'EOF' > connector.json
-{
-  "type": "oidc",
-  "name": "My Provider",
-  "id": "my-provider",
-  "config": {
-    "issuer": "https://idp.example.com",
-    "clientID": "my-client-id",
-    "clientSecret": "my-client-secret",
-    "redirectURI": "https://mgmt.example.com/oauth2/callback"
-  }
-}
-EOF
-
-# Base64-encode and pass to the tool
-./netbird-idp-migrate \
-  --config /etc/netbird/management.json \
-  --idp-seed-info "$(base64 < connector.json)"
-```
-
-### Non-interactive (CI/scripts)
+### Non-interactive (CI / scripts)
 
 ```bash
 ./netbird-idp-migrate \
@@ -341,53 +413,65 @@ EOF
   --force
 ```
 
+---
+
 ## Troubleshooting
 
 ### "store does not support migration operations"
 
-The store implementation doesn't have the required `ListUsers`/`UpdateUserID` methods. Make sure you're running v0.60.0+ binaries.
+The store implementation is missing the required `ListUsers`/`UpdateUserID` methods. Upgrade to v0.60.0+ binaries.
 
 ### "could not determine domain"
 
-The tool couldn't infer your management server's domain. Set `HttpConfig.LetsEncryptDomain` in management.json before running, or run with `--skip-config` and configure the embedded IdP section manually.
+The tool couldn't infer your management server's domain. Either set `HttpConfig.LetsEncryptDomain` in `management.json` before running, or use `--skip-config` and configure the embedded IdP section manually.
 
 ### "could not open activity store"
 
-This is a warning, not an error. If `events.db` doesn't exist (e.g., fresh install), activity event migration is skipped. User ID migration in the main database still proceeds.
+This is a **warning**, not an error. If `events.db` doesn't exist (e.g., fresh install), activity event migration is skipped. User ID migration in the main database still proceeds normally.
 
 ### "no connector configuration found"
 
-The tool couldn't find IdP configuration anywhere. Provide it explicitly with `--idp-seed-info`, set the `IDP_SEED_INFO` env var, or make sure `IdpManagerConfig` is present in management.json.
+No IdP configuration was detected. Provide it explicitly with `--idp-seed-info`, set the `IDP_SEED_INFO` env var, or ensure `IdpManagerConfig` is present in `management.json`.
 
 ### "zitadel auto-detection is not supported"
 
-Zitadel's management config uses service account credentials (e.g., `ClientID: "netbird-service-account"`) that aren't valid OAuth client credentials. See the [Zitadel setup](#zitadel) section above for step-by-step instructions.
+Zitadel's management config uses service account credentials that aren't valid OAuth client credentials. Follow the [Zitadel setup](#zitadel) in Step 2 to create a dedicated OAuth application.
 
 ### "no client secret found"
 
-The Dex OIDC connector requires a confidential OAuth client with a client secret. If your `IdpManagerConfig.ClientConfig.ClientSecret` is empty, provide the connector credentials via `--idp-seed-info`.
+The Dex OIDC connector requires a confidential OAuth client with a client secret. If `IdpManagerConfig.ClientConfig.ClientSecret` is empty in your config, provide the connector credentials via `--idp-seed-info`.
 
 ### "Errors.App.NotFound" from Zitadel after migration
 
-This usually means the connector's `clientID` is not a valid Zitadel OAuth application. The management server's `IdpManagerConfig.ClientConfig.ClientID` is typically a service account name (e.g., `netbird-service-account`), not an OAuth app ID. Create a Web application in Zitadel and re-run with `--idp-seed-info` — see the [Zitadel setup](#zitadel) section.
+The dashboard is still redirecting to Zitadel's `/oauth/v2/` endpoint instead of the management server's `/oauth2` endpoint. Set `AUTH_AUTHORITY=https://<your-domain>/oauth2` in your dashboard environment — see [Step 6b](#6b-update-dashboard-environment).
 
 ### OIDC discovery returns 404
 
-The `/oauth2/` path is not being routed to the management server. See [step 7 (reverse proxy)](#7-update-your-reverse-proxy) — you need to add a route for `/oauth2/*` in your reverse proxy (Caddy, nginx, etc.).
+The `/oauth2/` path is not being routed to the management server. Add a reverse proxy route — see [Step 6a](#6a-update-your-reverse-proxy).
 
 ### "jumpcloud does not have a supported Dex connector type"
 
-JumpCloud isn't supported for auto-detection. You'll need to configure a generic OIDC connector manually using `--idp-seed-info`.
+JumpCloud has no native Dex connector. Configure a generic OIDC connector manually with `--idp-seed-info` — see [Custom providers](#custom--unsupported-provider-jumpcloud-etc) in Step 2.
+
+### "failed to create embedded IDP service: cannot disable local authentication..."
+
+The embedded IdP didn't support `StaticConnectors` in the config until post-`<INSERT_VERSION>`. Upgrade to a version that includes this fix.
 
 ### Partial failure / re-running
 
-The migration is idempotent. Already-migrated users are detected and skipped. If the tool fails partway through (e.g., database error), fix the issue and re-run — it will pick up where it left off.
+The migration is **idempotent**. Already-migrated users are detected and skipped. If the tool fails partway through, fix the underlying issue and re-run — it picks up where it left off.
 
-## Rolling back
+---
+
+## Rolling Back
 
 If something goes wrong after migration:
 
-1. Stop the management server.
-2. Restore your database backup (`store.db.bak` — or the volume-level copy for Docker, or `pg_dump` for PostgreSQL).
-3. Restore `management.json.bak` (or your own backup).
-4. Start the management server.
+1. **Stop** the management server.
+2. **Restore the database:**
+   - SQLite (bare-metal): `cp /var/lib/netbird/store.db.bak /var/lib/netbird/store.db`
+   - SQLite (Docker volume): `sudo cp $VOLUME_PATH/store.db.bak $VOLUME_PATH/store.db`
+   - PostgreSQL: restore from your `pg_dump` backup
+3. **Restore the config:** `cp /etc/netbird/management.json.bak /etc/netbird/management.json`
+4. **Revert** any reverse proxy or dashboard env changes.
+5. **Start** the management server.
