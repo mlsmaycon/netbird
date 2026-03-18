@@ -494,6 +494,10 @@ func (m *Manager) persistServiceUpdate(ctx context.Context, accountID string, se
 			return err
 		}
 
+		if existingService.Terminated {
+			return status.Errorf(status.PermissionDenied, "service is terminated and cannot be updated")
+		}
+
 		if err := validateProtocolChange(existingService.Mode, service.Mode); err != nil {
 			return err
 		}

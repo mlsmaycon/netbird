@@ -3629,6 +3629,9 @@ type Service struct {
 
 	// Targets List of target backends for this service
 	Targets []ServiceTarget `json:"targets"`
+
+	// Terminated Whether the service has been terminated. Terminated services cannot be updated. Services that violate the Terms of Service will be terminated.
+	Terminated *bool `json:"terminated,omitempty"`
 }
 
 // ServiceMode Service mode. "http" for L7 reverse proxy, "tcp"/"udp"/"tls" for L4 passthrough.

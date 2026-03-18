@@ -2995,6 +2995,11 @@ components:
           type: boolean
           description: Whether the service is enabled
           example: true
+        terminated:
+          type: boolean
+          description: Whether the service has been terminated. Terminated services cannot be updated. Services that violate the Terms of Service will be terminated.
+          readOnly: true
+          example: false
         pass_host_header:
           type: boolean
           description: When true, the original client Host header is passed through to the backend instead of being rewritten to the backend's address
