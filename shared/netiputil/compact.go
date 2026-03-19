@@ -24,14 +24,14 @@ func EncodePrefix(p netip.Prefix) []byte {
 func DecodePrefix(b []byte) (netip.Prefix, error) {
 	switch len(b) {
 	case 5:
-		ip4 := [4]byte(b[:4])
-		addr := netip.AddrFrom4(ip4)
-		return netip.PrefixFrom(addr, int(b[4])), nil
+		var ip4 [4]byte
+		copy(ip4[:], b)
+		return netip.PrefixFrom(netip.AddrFrom4(ip4), int(b[len(b)-1])), nil
 	case 17:
-		ip6 := [16]byte(b[:16])
+		var ip6 [16]byte
+		copy(ip6[:], b)
 		addr := netip.AddrFrom16(ip6).Unmap()
-		bits := int(b[16])
-		// Clamp prefix length when unmapping v4-mapped v6 to v4
+		bits := int(b[len(b)-1])
 		if addr.Is4() && bits > 32 {
 			bits = 32
 		}
