@@ -69,7 +69,7 @@ func (m Manager) GetDomains(ctx context.Context, accountID, userID string) ([]*d
 	var ret []*domain.Domain
 
 	// Add connected proxy clusters as free domains.
-	// For BYOD accounts, only their own cluster is returned; otherwise shared clusters.
+	// For BYOP accounts, only their own cluster is returned; otherwise shared clusters.
 	allowList, err := m.getClusterAllowList(ctx, accountID)
 	if err != nil {
 		log.WithContext(ctx).Errorf("failed to get active proxy cluster addresses: %v", err)
@@ -286,12 +286,12 @@ func (m Manager) DeriveClusterFromDomain(ctx context.Context, accountID, domain 
 }
 
 func (m Manager) getClusterAllowList(ctx context.Context, accountID string) ([]string, error) {
-	byodAddresses, err := m.proxyManager.GetActiveClusterAddressesForAccount(ctx, accountID)
+	byopAddresses, err := m.proxyManager.GetActiveClusterAddressesForAccount(ctx, accountID)
 	if err != nil {
-		return nil, fmt.Errorf("get BYOD cluster addresses: %w", err)
+		return nil, fmt.Errorf("get BYOP cluster addresses: %w", err)
 	}
-	if len(byodAddresses) > 0 {
-		return byodAddresses, nil
+	if len(byopAddresses) > 0 {
+		return byopAddresses, nil
 	}
 	return m.proxyManager.GetActiveClusterAddresses(ctx)
 }

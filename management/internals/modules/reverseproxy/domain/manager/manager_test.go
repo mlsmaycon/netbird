@@ -28,14 +28,14 @@ func (m *mockProxyManager) GetActiveClusterAddressesForAccount(ctx context.Conte
 	return nil, nil
 }
 
-func TestGetClusterAllowList_BYODProxy(t *testing.T) {
+func TestGetClusterAllowList_BYOPProxy(t *testing.T) {
 	pm := &mockProxyManager{
 		getActiveClusterAddressesForAccountFunc: func(_ context.Context, accID string) ([]string, error) {
 			assert.Equal(t, "acc-123", accID)
-			return []string{"byod.example.com"}, nil
+			return []string{"byop.example.com"}, nil
 		},
 		getActiveClusterAddressesFunc: func(_ context.Context) ([]string, error) {
-			t.Fatal("should not call GetActiveClusterAddresses when BYOD addresses exist")
+			t.Fatal("should not call GetActiveClusterAddresses when BYOP addresses exist")
 			return nil, nil
 		},
 	}
@@ -43,10 +43,10 @@ func TestGetClusterAllowList_BYODProxy(t *testing.T) {
 	mgr := Manager{proxyManager: pm}
 	result, err := mgr.getClusterAllowList(context.Background(), "acc-123")
 	require.NoError(t, err)
-	assert.Equal(t, []string{"byod.example.com"}, result)
+	assert.Equal(t, []string{"byop.example.com"}, result)
 }
 
-func TestGetClusterAllowList_NoBYOD_FallbackToShared(t *testing.T) {
+func TestGetClusterAllowList_NoBYOP_FallbackToShared(t *testing.T) {
 	pm := &mockProxyManager{
 		getActiveClusterAddressesForAccountFunc: func(_ context.Context, _ string) ([]string, error) {
 			return nil, nil
@@ -62,7 +62,7 @@ func TestGetClusterAllowList_NoBYOD_FallbackToShared(t *testing.T) {
 	assert.Equal(t, []string{"eu.proxy.netbird.io", "us.proxy.netbird.io"}, result)
 }
 
-func TestGetClusterAllowList_BYODError_FallbackToShared(t *testing.T) {
+func TestGetClusterAllowList_BYOPError_FallbackToShared(t *testing.T) {
 	pm := &mockProxyManager{
 		getActiveClusterAddressesForAccountFunc: func(_ context.Context, _ string) ([]string, error) {
 			return nil, errors.New("db error")
@@ -78,7 +78,7 @@ func TestGetClusterAllowList_BYODError_FallbackToShared(t *testing.T) {
 	assert.Equal(t, []string{"eu.proxy.netbird.io"}, result)
 }
 
-func TestGetClusterAllowList_BYODEmptySlice_FallbackToShared(t *testing.T) {
+func TestGetClusterAllowList_BYOPEmptySlice_FallbackToShared(t *testing.T) {
 	pm := &mockProxyManager{
 		getActiveClusterAddressesForAccountFunc: func(_ context.Context, _ string) ([]string, error) {
 			return []string{}, nil

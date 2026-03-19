@@ -50,7 +50,7 @@ func TestListProxies_Success(t *testing.T) {
 	proxyMgr := proxy.NewMockManager(ctrl)
 	proxyMgr.EXPECT().GetAccountProxy(gomock.Any(), accountID).Return(&proxy.Proxy{
 		ID:             "proxy-1",
-		ClusterAddress: "byod.example.com",
+		ClusterAddress: "byop.example.com",
 		IPAddress:      "10.0.0.1",
 		AccountID:      &accountID,
 		Status:         proxy.StatusConnected,
@@ -60,8 +60,8 @@ func TestListProxies_Success(t *testing.T) {
 
 	serviceMgr := rpservice.NewMockManager(ctrl)
 	serviceMgr.EXPECT().GetAccountServices(gomock.Any(), accountID).Return([]*rpservice.Service{
-		{ProxyCluster: "byod.example.com"},
-		{ProxyCluster: "byod.example.com"},
+		{ProxyCluster: "byop.example.com"},
+		{ProxyCluster: "byop.example.com"},
 		{ProxyCluster: "other.cluster.com"},
 	}, nil)
 
@@ -85,7 +85,7 @@ func TestListProxies_Success(t *testing.T) {
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
 	require.Len(t, resp, 1)
 	assert.Equal(t, "proxy-1", resp[0].Id)
-	assert.Equal(t, "byod.example.com", resp[0].ClusterAddress)
+	assert.Equal(t, "byop.example.com", resp[0].ClusterAddress)
 	assert.Equal(t, 2, resp[0].ServiceCount)
 	assert.Equal(t, api.SelfHostedProxyStatus(proxy.StatusConnected), resp[0].Status)
 }

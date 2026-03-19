@@ -13,7 +13,7 @@ func TestIsProxyAddressValid(t *testing.T) {
 		valid bool
 	}{
 		{name: "valid domain", addr: "eu.proxy.netbird.io", valid: true},
-		{name: "valid subdomain", addr: "byod.proxy.example.com", valid: true},
+		{name: "valid subdomain", addr: "byop.proxy.example.com", valid: true},
 		{name: "valid IPv4", addr: "10.0.0.1", valid: true},
 		{name: "valid IPv4 public", addr: "203.0.113.10", valid: true},
 		{name: "valid IPv6", addr: "::1", valid: true},

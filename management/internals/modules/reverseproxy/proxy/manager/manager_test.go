@@ -246,7 +246,7 @@ func TestGetAccountProxy(t *testing.T) {
 	t.Run("found", func(t *testing.T) {
 		expected := &proxy.Proxy{
 			ID:             "proxy-1",
-			ClusterAddress: "byod.example.com",
+			ClusterAddress: "byop.example.com",
 			AccountID:      &accountID,
 			Status:         proxy.StatusConnected,
 		}
@@ -306,7 +306,7 @@ func TestDeleteProxy(t *testing.T) {
 }
 
 func TestGetActiveClusterAddressesForAccount(t *testing.T) {
-	expected := []string{"byod.example.com"}
+	expected := []string{"byop.example.com"}
 	s := &mockStore{
 		getActiveProxyClusterAddressesForAccFunc: func(_ context.Context, accID string) ([]string, error) {
 			assert.Equal(t, "acc-123", accID)

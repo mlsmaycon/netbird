@@ -226,7 +226,7 @@ func (s *ProxyServiceServer) GetMappingUpdate(req *proto.GetMappingUpdateRequest
 			if strings.Contains(err.Error(), "UNIQUE constraint") || strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "idx_proxy_account_id_unique") {
 				return status.Errorf(codes.ResourceExhausted, "limit of 1 self-hosted proxy per account")
 			}
-			return status.Errorf(codes.Internal, "failed to register BYOD proxy: %v", err)
+			return status.Errorf(codes.Internal, "failed to register BYOP proxy: %v", err)
 		}
 		log.WithContext(ctx).Warnf("Failed to register proxy %s in database: %v", proxyID, err)
 	}
@@ -308,7 +308,7 @@ func (s *ProxyServiceServer) heartbeat(ctx context.Context, conn *proxyConnectio
 
 // sendSnapshot sends the initial snapshot of services to the connecting proxy.
 // Only services matching the proxy's cluster address are sent.
-// For BYOD proxies (account-scoped), only account services are sent.
+// For BYOP proxies (account-scoped), only account services are sent.
 func (s *ProxyServiceServer) sendSnapshot(ctx context.Context, conn *proxyConnection) error {
 	var services []*rpservice.Service
 	var err error
@@ -450,7 +450,7 @@ func (s *ProxyServiceServer) SendAccessLog(ctx context.Context, req *proto.SendA
 // Management should call this when services are created/updated/removed.
 // For create/update operations a unique one-time auth token is generated per
 // proxy so that every replica can independently authenticate with management.
-// BYOD proxies only receive updates for their own account's services.
+// BYOP proxies only receive updates for their own account's services.
 func (s *ProxyServiceServer) SendServiceUpdate(update *proto.GetMappingUpdateResponse) {
 	log.Debugf("Broadcasting service update to all connected proxy servers")
 	var updateAccountID string

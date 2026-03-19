@@ -27,7 +27,7 @@ import (
 	"github.com/netbirdio/netbird/shared/management/proto"
 )
 
-type byodTestSetup struct {
+type byopTestSetup struct {
 	store        store.Store
 	proxyService *nbgrpc.ProxyServiceServer
 	grpcServer   *grpc.Server
@@ -42,15 +42,15 @@ type byodTestSetup struct {
 	accountBCluster string
 }
 
-func setupBYODIntegrationTest(t *testing.T) *byodTestSetup {
+func setupBYOPIntegrationTest(t *testing.T) *byopTestSetup {
 	t.Helper()
 	ctx := context.Background()
 
 	testStore, storeCleanup, err := store.NewTestStoreFromSQL(ctx, "", t.TempDir())
 	require.NoError(t, err)
 
-	accountAID := "byod-account-a"
-	accountBID := "byod-account-b"
+	accountAID := "byop-account-a"
+	accountBID := "byop-account-b"
 
 	for _, acc := range []*types.Account{
 		{Id: accountAID, Domain: "a.test.com", DomainCategory: "private", IsDomainPrimaryAccount: true, CreatedAt: time.Now()},
@@ -64,8 +64,8 @@ func setupBYODIntegrationTest(t *testing.T) *byodTestSetup {
 	pubKey := base64.StdEncoding.EncodeToString(pub)
 	privKey := base64.StdEncoding.EncodeToString(priv)
 
-	clusterA := "byod-a.proxy.test"
-	clusterB := "byod-b.proxy.test"
+	clusterA := "byop-a.proxy.test"
+	clusterB := "byop-b.proxy.test"
 
 	services := []*service.Service{
 		{
@@ -91,11 +91,11 @@ func setupBYODIntegrationTest(t *testing.T) *byodTestSetup {
 		require.NoError(t, testStore.CreateService(ctx, svc))
 	}
 
-	tokenA, err := types.CreateNewProxyAccessToken("byod-token-a", 0, &accountAID, "admin-a")
+	tokenA, err := types.CreateNewProxyAccessToken("byop-token-a", 0, &accountAID, "admin-a")
 	require.NoError(t, err)
 	require.NoError(t, testStore.SaveProxyAccessToken(ctx, &tokenA.ProxyAccessToken))
 
-	tokenB, err := types.CreateNewProxyAccessToken("byod-token-b", 0, &accountBID, "admin-b")
+	tokenB, err := types.CreateNewProxyAccessToken("byop-token-b", 0, &accountBID, "admin-b")
 	require.NoError(t, err)
 	require.NoError(t, testStore.SaveProxyAccessToken(ctx, &tokenB.ProxyAccessToken))
 
@@ -147,7 +147,7 @@ func setupBYODIntegrationTest(t *testing.T) *byodTestSetup {
 		}
 	}()
 
-	return &byodTestSetup{
+	return &byopTestSetup{
 		store:        testStore,
 		proxyService: proxyService,
 		grpcServer:   grpcServer,
@@ -166,12 +166,12 @@ func setupBYODIntegrationTest(t *testing.T) *byodTestSetup {
 	}
 }
 
-func byodContext(ctx context.Context, token types.PlainProxyToken) context.Context {
+func byopContext(ctx context.Context, token types.PlainProxyToken) context.Context {
 	md := metadata.Pairs("authorization", "Bearer "+string(token))
 	return metadata.NewOutgoingContext(ctx, md)
 }
 
-func receiveBYODMappings(t *testing.T, stream proto.ProxyService_GetMappingUpdateClient) []*proto.ProxyMapping {
+func receiveBYOPMappings(t *testing.T, stream proto.ProxyService_GetMappingUpdateClient) []*proto.ProxyMapping {
 	t.Helper()
 	var mappings []*proto.ProxyMapping
 	for {
@@ -185,8 +185,8 @@ func receiveBYODMappings(t *testing.T, stream proto.ProxyService_GetMappingUpdat
 	return mappings
 }
 
-func TestIntegration_BYODProxy_ReceivesOnlyAccountServices(t *testing.T) {
-	setup := setupBYODIntegrationTest(t)
+func TestIntegration_BYOPProxy_ReceivesOnlyAccountServices(t *testing.T) {
+	setup := setupBYOPIntegrationTest(t)
 	defer setup.cleanup()
 
 	conn, err := grpc.NewClient(setup.grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -195,19 +195,19 @@ func TestIntegration_BYODProxy_ReceivesOnlyAccountServices(t *testing.T) {
 
 	client := proto.NewProxyServiceClient(conn)
 
-	ctx, cancel := context.WithTimeout(byodContext(context.Background(), setup.accountAToken), 5*time.Second)
+	ctx, cancel := context.WithTimeout(byopContext(context.Background(), setup.accountAToken), 5*time.Second)
 	defer cancel()
 
 	stream, err := client.GetMappingUpdate(ctx, &proto.GetMappingUpdateRequest{
-		ProxyId: "byod-proxy-a",
+		ProxyId: "byop-proxy-a",
 		Version: "test-v1",
 		Address: setup.accountACluster,
 	})
 	require.NoError(t, err)
 
-	mappings := receiveBYODMappings(t, stream)
+	mappings := receiveBYOPMappings(t, stream)
 
-	assert.Len(t, mappings, 2, "BYOD proxy should receive only account A's 2 services")
+	assert.Len(t, mappings, 2, "BYOP proxy should receive only account A's 2 services")
 	for _, m := range mappings {
 		assert.Equal(t, setup.accountA, m.GetAccountId(), "all mappings should belong to account A")
 		t.Logf("received mapping: id=%s domain=%s account=%s", m.GetId(), m.GetDomain(), m.GetAccountId())
@@ -222,8 +222,8 @@ func TestIntegration_BYODProxy_ReceivesOnlyAccountServices(t *testing.T) {
 	assert.False(t, ids["svc-b1"], "should NOT contain account B's svc-b1")
 }
 
-func TestIntegration_BYODProxy_AccountBReceivesOnlyItsServices(t *testing.T) {
-	setup := setupBYODIntegrationTest(t)
+func TestIntegration_BYOPProxy_AccountBReceivesOnlyItsServices(t *testing.T) {
+	setup := setupBYOPIntegrationTest(t)
 	defer setup.cleanup()
 
 	conn, err := grpc.NewClient(setup.grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -232,25 +232,25 @@ func TestIntegration_BYODProxy_AccountBReceivesOnlyItsServices(t *testing.T) {
 
 	client := proto.NewProxyServiceClient(conn)
 
-	ctx, cancel := context.WithTimeout(byodContext(context.Background(), setup.accountBToken), 5*time.Second)
+	ctx, cancel := context.WithTimeout(byopContext(context.Background(), setup.accountBToken), 5*time.Second)
 	defer cancel()
 
 	stream, err := client.GetMappingUpdate(ctx, &proto.GetMappingUpdateRequest{
-		ProxyId: "byod-proxy-b",
+		ProxyId: "byop-proxy-b",
 		Version: "test-v1",
 		Address: setup.accountBCluster,
 	})
 	require.NoError(t, err)
 
-	mappings := receiveBYODMappings(t, stream)
+	mappings := receiveBYOPMappings(t, stream)
 
-	assert.Len(t, mappings, 1, "BYOD proxy B should receive only 1 service")
+	assert.Len(t, mappings, 1, "BYOP proxy B should receive only 1 service")
 	assert.Equal(t, "svc-b1", mappings[0].GetId())
 	assert.Equal(t, setup.accountB, mappings[0].GetAccountId())
 }
 
-func TestIntegration_BYODProxy_LimitOnePerAccount(t *testing.T) {
-	setup := setupBYODIntegrationTest(t)
+func TestIntegration_BYOPProxy_LimitOnePerAccount(t *testing.T) {
+	setup := setupBYOPIntegrationTest(t)
 	defer setup.cleanup()
 
 	conn, err := grpc.NewClient(setup.grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -259,23 +259,23 @@ func TestIntegration_BYODProxy_LimitOnePerAccount(t *testing.T) {
 
 	client := proto.NewProxyServiceClient(conn)
 
-	ctx1, cancel1 := context.WithTimeout(byodContext(context.Background(), setup.accountAToken), 5*time.Second)
+	ctx1, cancel1 := context.WithTimeout(byopContext(context.Background(), setup.accountAToken), 5*time.Second)
 	defer cancel1()
 
 	stream1, err := client.GetMappingUpdate(ctx1, &proto.GetMappingUpdateRequest{
-		ProxyId: "byod-proxy-a-first",
+		ProxyId: "byop-proxy-a-first",
 		Version: "test-v1",
 		Address: setup.accountACluster,
 	})
 	require.NoError(t, err)
 
-	_ = receiveBYODMappings(t, stream1)
+	_ = receiveBYOPMappings(t, stream1)
 
-	ctx2, cancel2 := context.WithTimeout(byodContext(context.Background(), setup.accountAToken), 5*time.Second)
+	ctx2, cancel2 := context.WithTimeout(byopContext(context.Background(), setup.accountAToken), 5*time.Second)
 	defer cancel2()
 
 	stream2, err := client.GetMappingUpdate(ctx2, &proto.GetMappingUpdateRequest{
-		ProxyId: "byod-proxy-a-second",
+		ProxyId: "byop-proxy-a-second",
 		Version: "test-v1",
 		Address: setup.accountACluster,
 	})
@@ -286,12 +286,12 @@ func TestIntegration_BYODProxy_LimitOnePerAccount(t *testing.T) {
 
 	st, ok := grpcstatus.FromError(err)
 	require.True(t, ok)
-	assert.Equal(t, codes.ResourceExhausted, st.Code(), "second BYOD proxy should be rejected with ResourceExhausted")
+	assert.Equal(t, codes.ResourceExhausted, st.Code(), "second BYOP proxy should be rejected with ResourceExhausted")
 	t.Logf("expected rejection: %s", st.Message())
 }
 
-func TestIntegration_BYODProxy_ClusterAddressConflict(t *testing.T) {
-	setup := setupBYODIntegrationTest(t)
+func TestIntegration_BYOPProxy_ClusterAddressConflict(t *testing.T) {
+	setup := setupBYOPIntegrationTest(t)
 	defer setup.cleanup()
 
 	conn, err := grpc.NewClient(setup.grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -300,23 +300,23 @@ func TestIntegration_BYODProxy_ClusterAddressConflict(t *testing.T) {
 
 	client := proto.NewProxyServiceClient(conn)
 
-	ctx1, cancel1 := context.WithTimeout(byodContext(context.Background(), setup.accountAToken), 5*time.Second)
+	ctx1, cancel1 := context.WithTimeout(byopContext(context.Background(), setup.accountAToken), 5*time.Second)
 	defer cancel1()
 
 	stream1, err := client.GetMappingUpdate(ctx1, &proto.GetMappingUpdateRequest{
-		ProxyId: "byod-proxy-a-cluster",
+		ProxyId: "byop-proxy-a-cluster",
 		Version: "test-v1",
 		Address: setup.accountACluster,
 	})
 	require.NoError(t, err)
 
-	_ = receiveBYODMappings(t, stream1)
+	_ = receiveBYOPMappings(t, stream1)
 
-	ctx2, cancel2 := context.WithTimeout(byodContext(context.Background(), setup.accountBToken), 5*time.Second)
+	ctx2, cancel2 := context.WithTimeout(byopContext(context.Background(), setup.accountBToken), 5*time.Second)
 	defer cancel2()
 
 	stream2, err := client.GetMappingUpdate(ctx2, &proto.GetMappingUpdateRequest{
-		ProxyId: "byod-proxy-b-conflict",
+		ProxyId: "byop-proxy-b-conflict",
 		Version: "test-v1",
 		Address: setup.accountACluster,
 	})
@@ -331,8 +331,8 @@ func TestIntegration_BYODProxy_ClusterAddressConflict(t *testing.T) {
 	t.Logf("expected rejection: %s", st.Message())
 }
 
-func TestIntegration_BYODProxy_SameProxyReconnects(t *testing.T) {
-	setup := setupBYODIntegrationTest(t)
+func TestIntegration_BYOPProxy_SameProxyReconnects(t *testing.T) {
+	setup := setupBYOPIntegrationTest(t)
 	defer setup.cleanup()
 
 	conn, err := grpc.NewClient(setup.grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -341,9 +341,9 @@ func TestIntegration_BYODProxy_SameProxyReconnects(t *testing.T) {
 
 	client := proto.NewProxyServiceClient(conn)
 
-	proxyID := "byod-proxy-reconnect"
+	proxyID := "byop-proxy-reconnect"
 
-	ctx1, cancel1 := context.WithTimeout(byodContext(context.Background(), setup.accountAToken), 5*time.Second)
+	ctx1, cancel1 := context.WithTimeout(byopContext(context.Background(), setup.accountAToken), 5*time.Second)
 	stream1, err := client.GetMappingUpdate(ctx1, &proto.GetMappingUpdateRequest{
 		ProxyId: proxyID,
 		Version: "test-v1",
@@ -351,12 +351,12 @@ func TestIntegration_BYODProxy_SameProxyReconnects(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	firstMappings := receiveBYODMappings(t, stream1)
+	firstMappings := receiveBYOPMappings(t, stream1)
 	cancel1()
 
 	time.Sleep(200 * time.Millisecond)
 
-	ctx2, cancel2 := context.WithTimeout(byodContext(context.Background(), setup.accountAToken), 5*time.Second)
+	ctx2, cancel2 := context.WithTimeout(byopContext(context.Background(), setup.accountAToken), 5*time.Second)
 	defer cancel2()
 
 	stream2, err := client.GetMappingUpdate(ctx2, &proto.GetMappingUpdateRequest{
@@ -366,7 +366,7 @@ func TestIntegration_BYODProxy_SameProxyReconnects(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	secondMappings := receiveBYODMappings(t, stream2)
+	secondMappings := receiveBYOPMappings(t, stream2)
 
 	assert.Equal(t, len(firstMappings), len(secondMappings), "reconnect should receive same mappings")
 
@@ -379,8 +379,8 @@ func TestIntegration_BYODProxy_SameProxyReconnects(t *testing.T) {
 	}
 }
 
-func TestIntegration_BYODProxy_UnauthenticatedRejected(t *testing.T) {
-	setup := setupBYODIntegrationTest(t)
+func TestIntegration_BYOPProxy_UnauthenticatedRejected(t *testing.T) {
+	setup := setupBYOPIntegrationTest(t)
 	defer setup.cleanup()
 
 	conn, err := grpc.NewClient(setup.grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
