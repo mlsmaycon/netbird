@@ -110,6 +110,22 @@ func TestDecodePrefixInvalidLength(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestDecodePrefixInvalidBits(t *testing.T) {
+	// v4 with bits > 32
+	b := []byte{10, 0, 0, 1, 33}
+	_, err := DecodePrefix(b)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid IPv4 prefix length 33")
+
+	// v6 with bits > 128
+	b = make([]byte, 17)
+	b[0] = 0xfd
+	b[16] = 129
+	_, err = DecodePrefix(b)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid IPv6 prefix length 129")
+}
+
 func TestDecodePrefixUnmapsV6Input(t *testing.T) {
 	// If someone encodes a v4-mapped v6 as 17 bytes, decode should unmap it
 	// and clamp the prefix length to 32 for v4

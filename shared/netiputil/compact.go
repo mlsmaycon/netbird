@@ -26,14 +26,22 @@ func DecodePrefix(b []byte) (netip.Prefix, error) {
 	case 5:
 		var ip4 [4]byte
 		copy(ip4[:], b)
-		return netip.PrefixFrom(netip.AddrFrom4(ip4), int(b[len(b)-1])), nil
+		bits := int(b[len(b)-1])
+		if bits > 32 {
+			return netip.Prefix{}, fmt.Errorf("invalid IPv4 prefix length %d (max 32)", bits)
+		}
+		return netip.PrefixFrom(netip.AddrFrom4(ip4), bits), nil
 	case 17:
 		var ip6 [16]byte
 		copy(ip6[:], b)
 		addr := netip.AddrFrom16(ip6).Unmap()
 		bits := int(b[len(b)-1])
-		if addr.Is4() && bits > 32 {
-			bits = 32
+		if addr.Is4() {
+			if bits > 32 {
+				bits = 32
+			}
+		} else if bits > 128 {
+			return netip.Prefix{}, fmt.Errorf("invalid IPv6 prefix length %d (max 128)", bits)
 		}
 		return netip.PrefixFrom(addr, bits), nil
 	default:
