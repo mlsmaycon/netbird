@@ -200,6 +200,18 @@ message Flags {
   bool enableSSHLocalPortForwarding = 13;
   bool enableSSHRemotePortForwarding = 14;
   bool disableSSHAuth = 15;
+
+  bool disableIPv6 = 16;
+}
+
+// PeerCapability represents a feature the client binary supports.
+// Reported in PeerSystemMeta.capabilities on every login/sync.
+enum PeerCapability {
+  PeerCapabilityUnknown = 0;
+  // Client reads SourcePrefixes instead of the deprecated PeerIP string.
+  PeerCapabilitySourcePrefixes = 1;
+  // Client handles IPv6 overlay addresses and firewall rules.
+  PeerCapabilityIPv6Overlay = 2;
 }
 
 // PeerSystemMeta is machine meta data like OS and version.
@@ -221,6 +233,8 @@ message PeerSystemMeta {
   Environment environment = 15;
   repeated File files = 16;
   Flags flags = 17;
+
+  repeated PeerCapability capabilities = 18;
 }
 
 message LoginResponse {
