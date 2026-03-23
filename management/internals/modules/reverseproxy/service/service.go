@@ -262,7 +262,9 @@ func (s *Service) ToAPIResponse() *api.Service {
 		if opts == nil {
 			opts = &api.ServiceTargetOptions{}
 		}
-		opts.ProxyProtocol = &target.ProxyProtocol
+		if target.ProxyProtocol {
+			opts.ProxyProtocol = &target.ProxyProtocol
+		}
 		st.Options = opts
 		apiTargets = append(apiTargets, st)
 	}
