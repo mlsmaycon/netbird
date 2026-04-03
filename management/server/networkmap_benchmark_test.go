@@ -681,5 +681,159 @@ func BenchmarkMemoryPerNetworkMap(b *testing.B) {
 	}
 }
 
+// BenchmarkPrecomputedNetworkMap benchmarks the pre-computed group-level approach
+// where we build group views once and assemble per-peer maps from them.
+func BenchmarkPrecomputedNetworkMap(b *testing.B) {
+	benchCases := []struct {
+		name   string
+		peers  int
+		groups int
+	}{
+		{"1K_peers_50g", 1000, 50},
+		{"5K_peers_100g", 5000, 100},
+		{"10K_peers_100g", 10000, 100},
+		{"20K_peers_100g", 20000, 100},
+	}
+
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(os.Stderr)
+
+	for _, bc := range benchCases {
+		b.Run(bc.name, func(b *testing.B) {
+			account := buildLargeAccount(b, bc.peers, bc.groups)
+
+			validatedPeersMap := make(map[string]struct{}, len(account.Peers))
+			for peerID := range account.Peers {
+				validatedPeersMap[peerID] = struct{}{}
+			}
+
+			b.ResetTimer()
+			start := time.Now()
+
+			for i := 0; i < b.N; i++ {
+				pm := types.PrecomputeAccountMap(account, validatedPeersMap)
+				for _, peerID := range pm.AllPeerIDs() {
+					pm.AssemblePeerNetworkMap(peerID)
+				}
+			}
+
+			duration := time.Since(start)
+			msPerOp := float64(duration.Nanoseconds()) / float64(b.N) / 1e6
+			b.ReportMetric(msPerOp, "ms/op(all-peers)")
+			perPeerUs := msPerOp * 1000 / float64(bc.peers+bc.groups)
+			b.ReportMetric(perPeerUs, "us/peer")
+		})
+	}
+}
+
+// BenchmarkPrecomputedNetworkMap_Segmented benchmarks the pre-computed approach
+// with segmented policies (peers only see their own group), which is more realistic
+// for large deployments where not every peer talks to every other peer.
+func BenchmarkPrecomputedNetworkMap_Segmented(b *testing.B) {
+	benchCases := []struct {
+		name   string
+		peers  int
+		groups int
+	}{
+		{"5K_peers_100g_segmented", 5000, 100},
+		{"10K_peers_200g_segmented", 10000, 200},
+		{"20K_peers_500g_segmented", 20000, 500},
+		{"30K_peers_500g_segmented", 30000, 500},
+	}
+
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(os.Stderr)
+
+	for _, bc := range benchCases {
+		b.Run(bc.name, func(b *testing.B) {
+			account := buildSegmentedAccount(bc.peers, bc.groups)
+
+			validatedPeersMap := make(map[string]struct{}, len(account.Peers))
+			for peerID := range account.Peers {
+				validatedPeersMap[peerID] = struct{}{}
+			}
+
+			b.ResetTimer()
+			start := time.Now()
+
+			for i := 0; i < b.N; i++ {
+				pm := types.PrecomputeAccountMap(account, validatedPeersMap)
+				for _, peerID := range pm.AllPeerIDs() {
+					pm.AssemblePeerNetworkMap(peerID)
+				}
+			}
+
+			duration := time.Since(start)
+			msPerOp := float64(duration.Nanoseconds()) / float64(b.N) / 1e6
+			b.ReportMetric(msPerOp, "ms/op(all-peers)")
+			perPeerUs := msPerOp * 1000 / float64(len(account.Peers))
+			b.ReportMetric(perPeerUs, "us/peer")
+		})
+	}
+}
+
+// buildSegmentedAccount creates an account where each group has its own policy
+// (peers only talk to peers in their own group + one cross-group policy).
+// This is realistic for large enterprise deployments with segmented networks.
+func buildSegmentedAccount(numPeers, numGroups int) *types.Account {
+	account := &types.Account{
+		Id:     "bench-segmented",
+		Domain: "bench.netbird.io",
+		Network: &types.Network{
+			Identifier: "net-bench",
+			Net:        net.IPNet{IP: net.ParseIP("100.64.0.0"), Mask: net.CIDRMask(10, 32)},
+			Serial:     1,
+		},
+		Peers:            make(map[string]*nbpeer.Peer, numPeers),
+		Users:            map[string]*types.User{"user-1": {Id: "user-1", Role: types.UserRoleUser}},
+		Groups:           make(map[string]*types.Group),
+		Policies:         make([]*types.Policy, 0),
+		Routes:           make(map[route.ID]*route.Route),
+		NameServerGroups: make(map[string]*nbdns.NameServerGroup),
+		Settings: &types.Settings{
+			PeerLoginExpirationEnabled: false,
+			PeerLoginExpiration:        24 * time.Hour,
+		},
+	}
+
+	// Create peers
+	for i := 0; i < numPeers; i++ {
+		peerKey, _ := wgtypes.GeneratePrivateKey()
+		peerID := fmt.Sprintf("peer-%d", i)
+		account.Peers[peerID] = &nbpeer.Peer{
+			ID: peerID, AccountID: account.Id, DNSLabel: peerID,
+			Key:    peerKey.PublicKey().String(),
+			IP:     net.ParseIP(fmt.Sprintf("100.64.%d.%d", (i/256)%256, i%256+1)),
+			Status: &nbpeer.PeerStatus{LastSeen: time.Now(), Connected: true},
+			UserID: "user-1",
+			Meta:   nbpeer.PeerSystemMeta{Hostname: peerID, GoOS: "linux", WtVersion: "dev"},
+		}
+	}
+
+	// Create segmented groups (each peer in exactly ONE group)
+	peersPerGroup := numPeers / numGroups
+	for i := 0; i < numGroups; i++ {
+		gid := fmt.Sprintf("group-%d", i)
+		group := &types.Group{ID: gid, Name: gid}
+		for j := 0; j < peersPerGroup; j++ {
+			idx := i*peersPerGroup + j
+			group.Peers = append(group.Peers, fmt.Sprintf("peer-%d", idx))
+		}
+		account.Groups[gid] = group
+
+		// Intra-group policy: peers in group can talk to each other
+		account.Policies = append(account.Policies, &types.Policy{
+			ID: fmt.Sprintf("policy-%d", i), Enabled: true,
+			Rules: []*types.PolicyRule{{
+				ID: fmt.Sprintf("rule-%d", i), Enabled: true,
+				Action: types.PolicyTrafficActionAccept, Protocol: types.PolicyRuleProtocolALL,
+				Bidirectional: true, Sources: []string{gid}, Destinations: []string{gid},
+			}},
+		})
+	}
+
+	return account
+}
+
 // Ensure imports are used
 var _ = maps.Keys[map[string]struct{}]
