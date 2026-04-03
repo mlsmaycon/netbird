@@ -1,7 +1,9 @@
 package types
 
 import (
+	"context"
 	"net"
+	"strconv"
 
 	nbdns "github.com/netbirdio/netbird/dns"
 	nbpeer "github.com/netbirdio/netbird/management/server/peer"
@@ -136,6 +138,7 @@ func (pm *PrecomputedAccountMap) buildPolicyGraph() {
 }
 
 func (pm *PrecomputedAccountMap) buildVisibility() {
+	// Source groups see destination peers (OUT direction)
 	for srcGID, edges := range pm.srcGroupEdges {
 		if pm.groupVisiblePeers[srcGID] == nil {
 			pm.groupVisiblePeers[srcGID] = make(map[string]struct{})
@@ -148,6 +151,24 @@ func (pm *PrecomputedAccountMap) buildVisibility() {
 			for _, pid := range dstGroup.Peers {
 				if _, ok := pm.validatedPeers[pid]; ok {
 					pm.groupVisiblePeers[srcGID][pid] = struct{}{}
+				}
+			}
+		}
+	}
+
+	// Destination groups also see source peers (IN direction)
+	for dstGID, edges := range pm.dstGroupEdges {
+		if pm.groupVisiblePeers[dstGID] == nil {
+			pm.groupVisiblePeers[dstGID] = make(map[string]struct{})
+		}
+		for _, edge := range edges {
+			srcGroup := pm.account.Groups[edge.targetGroupID]
+			if srcGroup == nil {
+				continue
+			}
+			for _, pid := range srcGroup.Peers {
+				if _, ok := pm.validatedPeers[pid]; ok {
+					pm.groupVisiblePeers[dstGID][pid] = struct{}{}
 				}
 			}
 		}
@@ -224,14 +245,19 @@ func (pm *PrecomputedAccountMap) AssemblePeerNetworkMap(peerID string) *NetworkM
 		peers = append(peers, p)
 	}
 
-	// 3. Firewall rules — generated lazily from group-pair rules
-	activePeerIPs := make(map[string]string, len(peers)) // peerID -> IP string
-	for _, p := range peers {
-		activePeerIPs[p.ID] = net.IP(p.IP).String()
+	// 3. Firewall rules — generated lazily from group-pair rules.
+	// Include ALL visible peers (including expired) for firewall rules,
+	// matching legacy behavior where rules are generated before expiration filtering.
+	allVisiblePeerIPs := make(map[string]string, len(visiblePeerIDs))
+	for pid := range visiblePeerIDs {
+		if p := pm.account.Peers[pid]; p != nil {
+			allVisiblePeerIPs[pid] = net.IP(p.IP).String()
+		}
 	}
 
 	rulesDedup := make(map[fwRuleKey]struct{})
 	var fwRules []*FirewallRule
+	viewerFeatures := peerSupportedFirewallFeatures(peer.Meta.WtVersion)
 
 	// OUT rules: this peer is in source group, generate rules for destination peers
 	for srcGID := range peerGroups {
@@ -245,11 +271,11 @@ func (pm *PrecomputedAccountMap) AssemblePeerNetworkMap(peerID string) *NetworkM
 					if dstPeerID == peerID {
 						continue
 					}
-					ip, active := activePeerIPs[dstPeerID]
+					ip, active := allVisiblePeerIPs[dstPeerID]
 					if !active {
 						continue
 					}
-					pm.addFirewallRules(&fwRules, rulesDedup, cr, ip, FirewallRuleDirectionOUT)
+					pm.addFirewallRules(&fwRules, rulesDedup, cr, ip, FirewallRuleDirectionOUT, viewerFeatures)
 				}
 			}
 		}
@@ -267,11 +293,11 @@ func (pm *PrecomputedAccountMap) AssemblePeerNetworkMap(peerID string) *NetworkM
 					if srcPeerID == peerID {
 						continue
 					}
-					ip, active := activePeerIPs[srcPeerID]
+					ip, active := allVisiblePeerIPs[srcPeerID]
 					if !active {
 						continue
 					}
-					pm.addFirewallRules(&fwRules, rulesDedup, cr, ip, FirewallRuleDirectionIN)
+					pm.addFirewallRules(&fwRules, rulesDedup, cr, ip, FirewallRuleDirectionIN, viewerFeatures)
 				}
 			}
 		}
@@ -295,9 +321,12 @@ func (pm *PrecomputedAccountMap) AssemblePeerNetworkMap(peerID string) *NetworkM
 				continue
 			}
 			seenRoutes[r.ID] = struct{}{}
-			if _, ha := haSet[string(r.GetHAUniqueID())]; ha {
+
+			haID := string(r.GetHAUniqueID())
+			if _, ha := haSet[haID]; ha {
 				continue
 			}
+			haSet[haID] = struct{}{}
 			routes = append(routes, r)
 		}
 	}
@@ -324,13 +353,17 @@ func (pm *PrecomputedAccountMap) AssemblePeerNetworkMap(peerID string) *NetworkM
 		}
 	}
 
+	// 6. RoutesFirewallRules - delegate to existing logic (only applies to routing peers)
+	routesFirewallRules := pm.account.GetPeerRoutesFirewallRules(context.Background(), peerID, pm.validatedPeers)
+
 	return &NetworkMap{
-		Peers:         peers,
-		Network:       pm.account.Network.Copy(),
-		Routes:        routes,
-		DNSConfig:     dns,
-		OfflinePeers:  expired,
-		FirewallRules: fwRules,
+		Peers:               peers,
+		Network:             pm.account.Network.Copy(),
+		Routes:              routes,
+		DNSConfig:           dns,
+		OfflinePeers:        expired,
+		FirewallRules:       fwRules,
+		RoutesFirewallRules: routesFirewallRules,
 	}
 }
 
@@ -344,7 +377,7 @@ type fwRuleKey struct {
 	portEnd   uint16
 }
 
-func (pm *PrecomputedAccountMap) addFirewallRules(fwRules *[]*FirewallRule, dedup map[fwRuleKey]struct{}, cr *compactRule, peerIP string, direction int) {
+func (pm *PrecomputedAccountMap) addFirewallRules(fwRules *[]*FirewallRule, dedup map[fwRuleKey]struct{}, cr *compactRule, peerIP string, direction int, features supportedFeatures) {
 	if len(cr.ports) == 0 && len(cr.portRange) == 0 {
 		key := fwRuleKey{peerIP: peerIP, ruleID: cr.ruleID, direction: direction}
 		if _, exists := dedup[key]; exists {
@@ -370,16 +403,38 @@ func (pm *PrecomputedAccountMap) addFirewallRules(fwRules *[]*FirewallRule, dedu
 		})
 	}
 
+	// Port ranges: expand based on peer's version support, matching legacy behavior
+	if len(cr.ports) > 0 {
+		return // Ports take precedence over port ranges
+	}
+
 	for _, pr := range cr.portRange {
-		key := fwRuleKey{peerIP: peerIP, ruleID: cr.ruleID, direction: direction, portStart: pr.Start, portEnd: pr.End}
-		if _, exists := dedup[key]; exists {
-			continue
+		if features.portRanges {
+			key := fwRuleKey{peerIP: peerIP, ruleID: cr.ruleID, direction: direction, portStart: pr.Start, portEnd: pr.End}
+			if _, exists := dedup[key]; exists {
+				continue
+			}
+			dedup[key] = struct{}{}
+			*fwRules = append(*fwRules, &FirewallRule{
+				PolicyID: cr.ruleID, PeerIP: peerIP, Direction: direction,
+				Action: cr.action, Protocol: cr.protocol, PortRange: pr,
+			})
+		} else {
+			// Peer doesn't support port ranges - only allow single-port ranges
+			if pr.Start != pr.End {
+				continue
+			}
+			port := strconv.FormatUint(uint64(pr.Start), 10)
+			key := fwRuleKey{peerIP: peerIP, ruleID: cr.ruleID, direction: direction, port: port}
+			if _, exists := dedup[key]; exists {
+				continue
+			}
+			dedup[key] = struct{}{}
+			*fwRules = append(*fwRules, &FirewallRule{
+				PolicyID: cr.ruleID, PeerIP: peerIP, Direction: direction,
+				Action: cr.action, Protocol: cr.protocol, Port: port,
+			})
 		}
-		dedup[key] = struct{}{}
-		*fwRules = append(*fwRules, &FirewallRule{
-			PolicyID: cr.ruleID, PeerIP: peerIP, Direction: direction,
-			Action: cr.action, Protocol: cr.protocol, PortRange: pr,
-		})
 	}
 }
 

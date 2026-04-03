@@ -708,20 +708,27 @@ func BenchmarkPrecomputedNetworkMap(b *testing.B) {
 			}
 
 			b.ResetTimer()
-			start := time.Now()
 
+			var precomputeTotal, assembleTotal time.Duration
 			for i := 0; i < b.N; i++ {
+				t0 := time.Now()
 				pm := types.PrecomputeAccountMap(account, validatedPeersMap)
+				t1 := time.Now()
 				for _, peerID := range pm.AllPeerIDs() {
 					pm.AssemblePeerNetworkMap(peerID)
 				}
+				t2 := time.Now()
+				precomputeTotal += t1.Sub(t0)
+				assembleTotal += t2.Sub(t1)
 			}
 
-			duration := time.Since(start)
-			msPerOp := float64(duration.Nanoseconds()) / float64(b.N) / 1e6
-			b.ReportMetric(msPerOp, "ms/op(all-peers)")
-			perPeerUs := msPerOp * 1000 / float64(bc.peers+bc.groups)
-			b.ReportMetric(perPeerUs, "us/peer")
+			precomputeMs := float64(precomputeTotal.Nanoseconds()) / float64(b.N) / 1e6
+			assembleMs := float64(assembleTotal.Nanoseconds()) / float64(b.N) / 1e6
+			totalMs := precomputeMs + assembleMs
+			b.ReportMetric(precomputeMs, "ms/precompute")
+			b.ReportMetric(assembleMs, "ms/assemble")
+			b.ReportMetric(totalMs, "ms/op(all-peers)")
+			b.ReportMetric(totalMs*1000/float64(bc.peers+bc.groups), "us/peer")
 		})
 	}
 }
@@ -754,20 +761,27 @@ func BenchmarkPrecomputedNetworkMap_Segmented(b *testing.B) {
 			}
 
 			b.ResetTimer()
-			start := time.Now()
 
+			var precomputeTotal, assembleTotal time.Duration
 			for i := 0; i < b.N; i++ {
+				t0 := time.Now()
 				pm := types.PrecomputeAccountMap(account, validatedPeersMap)
+				t1 := time.Now()
 				for _, peerID := range pm.AllPeerIDs() {
 					pm.AssemblePeerNetworkMap(peerID)
 				}
+				t2 := time.Now()
+				precomputeTotal += t1.Sub(t0)
+				assembleTotal += t2.Sub(t1)
 			}
 
-			duration := time.Since(start)
-			msPerOp := float64(duration.Nanoseconds()) / float64(b.N) / 1e6
-			b.ReportMetric(msPerOp, "ms/op(all-peers)")
-			perPeerUs := msPerOp * 1000 / float64(len(account.Peers))
-			b.ReportMetric(perPeerUs, "us/peer")
+			precomputeMs := float64(precomputeTotal.Nanoseconds()) / float64(b.N) / 1e6
+			assembleMs := float64(assembleTotal.Nanoseconds()) / float64(b.N) / 1e6
+			totalMs := precomputeMs + assembleMs
+			b.ReportMetric(precomputeMs, "ms/precompute")
+			b.ReportMetric(assembleMs, "ms/assemble")
+			b.ReportMetric(totalMs, "ms/op(all-peers)")
+			b.ReportMetric(totalMs*1000/float64(len(account.Peers)), "us/peer")
 		})
 	}
 }

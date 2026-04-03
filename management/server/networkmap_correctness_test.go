@@ -211,6 +211,77 @@ func TestNetworkMapCorrectness_LegacyVsCompacted(t *testing.T) {
 	}
 }
 
+// TestNetworkMapCorrectness_PrecomputedVsLegacy verifies that the pre-computed
+// group-level approach produces identical results to the legacy per-peer calculation.
+// This tests the PrecomputeAccountMap + AssemblePeerNetworkMap path.
+func TestNetworkMapCorrectness_PrecomputedVsLegacy(t *testing.T) {
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(os.Stderr)
+
+	// Reuse same test cases but only ones without network resources / resource policies
+	// (precomputed doesn't handle those yet)
+	testCases := []struct {
+		name    string
+		account *types.Account
+		peerIDs []string
+	}{
+		{"simple_two_groups_bidirectional", buildSimpleTwoGroupAccount(), nil},
+		{"all_peers_single_policy", buildAllPeersSinglePolicyAccount(), nil},
+		{"multi_policy_with_port_rules", buildMultiPolicyWithPortRules(), nil},
+		{"with_expired_peers", buildAccountWithExpiredPeers(), nil},
+		{"overlapping_groups", buildAccountWithOverlappingGroups(), nil},
+		{"disabled_policies_and_rules", buildAccountWithDisabledPolicies(), nil},
+		{"drop_action_policies", buildAccountWithDropPolicies(), nil},
+		{"peer_not_in_any_policy", buildAccountWithIsolatedPeer(), []string{"isolated-peer"}},
+		{"unidirectional_policies", buildAccountWithUnidirectionalPolicies(), nil},
+		{"with_dns_and_nameservers", buildAccountWithDNS(), nil},
+		{"dns_disabled_management_groups", buildAccountWithDNSDisabledManagement(), nil},
+		{"multiple_nameserver_groups", buildAccountWithMultipleNameservers(), nil},
+		{"mixed_protocol_policies", buildAccountWithMixedProtocols(), nil},
+		{"port_ranges_policy", buildAccountWithPortRanges(), nil},
+		{"large_group_count_many_policies", buildAccountWithManyGroupsAndPolicies(), nil},
+		{"ha_routes_same_network", buildAccountWithHARoutes(), nil},
+		{"with_routes_and_access_control", buildAccountWithRoutes(), nil},
+		{"account_settings_expiration_variants", buildAccountWithExpirationVariants(), nil},
+		{"large_scale_500_peers_50_groups", buildLargeAccount(t, 500, 50), nil},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			account := tc.account
+			ctx := context.Background()
+
+			validatedPeersMap := make(map[string]struct{}, len(account.Peers))
+			for peerID := range account.Peers {
+				validatedPeersMap[peerID] = struct{}{}
+			}
+
+			resourcePolicies := account.GetResourcePoliciesMap()
+			routers := account.GetResourceRoutersMap()
+			groupIDToUserIDs := account.GetActiveGroupUsers()
+
+			// Build pre-computed map
+			pm := types.PrecomputeAccountMap(account, validatedPeersMap)
+
+			peersToTest := tc.peerIDs
+			if len(peersToTest) == 0 {
+				peersToTest = pm.AllPeerIDs()
+			}
+
+			for _, peerID := range peersToTest {
+				legacyMap := account.GetPeerNetworkMap(
+					ctx, peerID, nbdns.CustomZone{}, nil,
+					validatedPeersMap, resourcePolicies, routers, nil, groupIDToUserIDs,
+				)
+
+				precomputedMap := pm.AssemblePeerNetworkMap(peerID)
+
+				assertNetworkMapsEqual(t, peerID, legacyMap, precomputedMap)
+			}
+		})
+	}
+}
+
 // TestNetworkMapCorrectness_FieldValues validates specific field values in
 // the network map to ensure critical data is correctly populated.
 func TestNetworkMapCorrectness_FieldValues(t *testing.T) {
