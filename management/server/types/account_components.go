@@ -26,8 +26,14 @@ func (a *Account) GetPeerNetworkMapFromComponents(
 	routers map[string]map[string]*routerTypes.NetworkRouter,
 	metrics *telemetry.AccountManagerMetrics,
 	groupIDToUserIDs map[string][]string,
+	peerGroupsIndex ...map[string]LookupMap,
 ) *NetworkMap {
 	start := time.Now()
+
+	var idx map[string]LookupMap
+	if len(peerGroupsIndex) > 0 {
+		idx = peerGroupsIndex[0]
+	}
 
 	components := a.GetPeerNetworkMapComponents(
 		ctx,
@@ -38,6 +44,7 @@ func (a *Account) GetPeerNetworkMapFromComponents(
 		resourcePolicies,
 		routers,
 		groupIDToUserIDs,
+		idx,
 	)
 
 	if components == nil {
@@ -70,6 +77,7 @@ func (a *Account) GetPeerNetworkMapComponents(
 	resourcePolicies map[string][]*Policy,
 	routers map[string]map[string]*routerTypes.NetworkRouter,
 	groupIDToUserIDs map[string][]string,
+	peerGroupsIndex map[string]LookupMap,
 ) *NetworkMapComponents {
 
 	peer := a.Peers[peerID]
@@ -102,7 +110,7 @@ func (a *Account) GetPeerNetworkMapComponents(
 
 	components.DNSSettings = &a.DNSSettings
 
-	relevantPeers, relevantGroups, relevantPolicies, relevantRoutes, sshReqs := a.getPeersGroupsPoliciesRoutes(ctx, peerID, peer.SSHEnabled, validatedPeersMap, &components.PostureFailedPeers)
+	relevantPeers, relevantGroups, relevantPolicies, relevantRoutes, sshReqs := a.getPeersGroupsPoliciesRoutes(ctx, peerID, peer.SSHEnabled, validatedPeersMap, &components.PostureFailedPeers, peerGroupsIndex)
 
 	if len(sshReqs.neededGroupIDs) > 0 {
 		components.GroupIDToUserIDs = filterGroupIDToUserIDs(groupIDToUserIDs, sshReqs.neededGroupIDs)
@@ -117,7 +125,16 @@ func (a *Account) GetPeerNetworkMapComponents(
 	components.Routes = relevantRoutes
 	components.AllDNSRecords = filterDNSRecordsByPeers(peersCustomZone.Records, relevantPeers)
 
-	peerGroups := a.GetPeerGroups(peerID)
+	// Pass account-level peer-to-groups index if available
+	components.PeerGroupsIndex = peerGroupsIndex
+
+	// Use index for O(1) peer group lookup
+	var peerGroups LookupMap
+	if peerGroupsIndex != nil {
+		peerGroups = a.GetPeerGroupsFromIndex(peerID, peerGroupsIndex)
+	} else {
+		peerGroups = a.GetPeerGroups(peerID)
+	}
 	components.AccountZones = filterPeerAppliedZones(ctx, accountZones, peerGroups)
 
 	for _, nsGroup := range a.NameServerGroups {
@@ -167,6 +184,14 @@ func (a *Account) GetPeerNetworkMapComponents(
 				peerInSources := false
 				if policy.Rules[0].SourceResource.Type == ResourceTypePeer && policy.Rules[0].SourceResource.ID != "" {
 					peerInSources = policy.Rules[0].SourceResource.ID == peerID
+				} else if peerGroupsIndex != nil {
+					peerGrps := peerGroupsIndex[peerID]
+					for _, groupID := range policy.SourceGroups() {
+						if _, ok := peerGrps[groupID]; ok {
+							peerInSources = true
+							break
+						}
+					}
 				} else {
 					for _, groupID := range policy.SourceGroups() {
 						if group := a.GetGroup(groupID); group != nil && slices.Contains(group.Peers, peerID) {
@@ -244,6 +269,7 @@ func (a *Account) getPeersGroupsPoliciesRoutes(
 	peerSSHEnabled bool,
 	validatedPeersMap map[string]struct{},
 	postureFailedPeers *map[string]map[string]struct{},
+	peerGroupsIndex map[string]LookupMap,
 ) (map[string]*nbpeer.Peer, map[string]*Group, []*Policy, []*route.Route, sshRequirements) {
 	relevantPeerIDs := make(map[string]*nbpeer.Peer, len(a.Peers)/4)
 	relevantGroupIDs := make(map[string]*Group, len(a.Groups)/4)
@@ -253,9 +279,18 @@ func (a *Account) getPeersGroupsPoliciesRoutes(
 
 	relevantPeerIDs[peerID] = a.GetPeer(peerID)
 
-	for groupID, group := range a.Groups {
-		if slices.Contains(group.Peers, peerID) {
-			relevantGroupIDs[groupID] = a.GetGroup(groupID)
+	// Use reverse index for O(1) group membership lookup if available
+	if peerGroupsIndex != nil {
+		if groups, ok := peerGroupsIndex[peerID]; ok {
+			for groupID := range groups {
+				relevantGroupIDs[groupID] = a.GetGroup(groupID)
+			}
+		}
+	} else {
+		for groupID, group := range a.Groups {
+			if slices.Contains(group.Peers, peerID) {
+				relevantGroupIDs[groupID] = a.GetGroup(groupID)
+			}
 		}
 	}
 
@@ -371,6 +406,8 @@ func (a *Account) getPeersFromGroups(ctx context.Context, groups []string, peerI
 	filteredPeerIDs := make([]string, 0, len(groups))
 	seenPeerIds := make(map[string]struct{}, len(groups))
 
+	hasPostureChecks := len(sourcePostureChecksIDs) > 0
+
 	for _, gid := range groups {
 		group := a.GetGroup(gid)
 		if group == nil {
@@ -381,30 +418,30 @@ func (a *Account) getPeersFromGroups(ctx context.Context, groups []string, peerI
 			filteredPeerIDs = make([]string, 0, len(group.Peers))
 			peerInGroups = false
 			for _, pid := range group.Peers {
-				peer, ok := a.Peers[pid]
-				if !ok || peer == nil {
-					continue
-				}
-
-				if _, ok := validatedPeersMap[peer.ID]; !ok {
-					continue
-				}
-
-				isValid, pname := a.validatePostureChecksOnPeerGetFailed(ctx, sourcePostureChecksIDs, peer.ID)
-				if !isValid && len(pname) > 0 {
-					if _, ok := (*postureFailedPeers)[pname]; !ok {
-						(*postureFailedPeers)[pname] = make(map[string]struct{})
+				if _, ok := validatedPeersMap[pid]; !ok {
+					if _, ok := a.Peers[pid]; !ok {
+						continue
 					}
-					(*postureFailedPeers)[pname][peer.ID] = struct{}{}
 					continue
 				}
 
-				if peer.ID == peerID {
+				if hasPostureChecks {
+					isValid, pname := a.validatePostureChecksOnPeerGetFailed(ctx, sourcePostureChecksIDs, pid)
+					if !isValid && len(pname) > 0 {
+						if _, ok := (*postureFailedPeers)[pname]; !ok {
+							(*postureFailedPeers)[pname] = make(map[string]struct{})
+						}
+						(*postureFailedPeers)[pname][pid] = struct{}{}
+						continue
+					}
+				}
+
+				if pid == peerID {
 					peerInGroups = true
 					continue
 				}
 
-				filteredPeerIDs = append(filteredPeerIDs, peer.ID)
+				filteredPeerIDs = append(filteredPeerIDs, pid)
 			}
 			return filteredPeerIDs, peerInGroups
 		}
@@ -414,30 +451,28 @@ func (a *Account) getPeersFromGroups(ctx context.Context, groups []string, peerI
 				continue
 			}
 			seenPeerIds[pid] = struct{}{}
-			peer, ok := a.Peers[pid]
-			if !ok || peer == nil {
+
+			if _, ok := validatedPeersMap[pid]; !ok {
 				continue
 			}
 
-			if _, ok := validatedPeersMap[peer.ID]; !ok {
-				continue
-			}
-
-			isValid, pname := a.validatePostureChecksOnPeerGetFailed(ctx, sourcePostureChecksIDs, peer.ID)
-			if !isValid && len(pname) > 0 {
-				if _, ok := (*postureFailedPeers)[pname]; !ok {
-					(*postureFailedPeers)[pname] = make(map[string]struct{})
+			if hasPostureChecks {
+				isValid, pname := a.validatePostureChecksOnPeerGetFailed(ctx, sourcePostureChecksIDs, pid)
+				if !isValid && len(pname) > 0 {
+					if _, ok := (*postureFailedPeers)[pname]; !ok {
+						(*postureFailedPeers)[pname] = make(map[string]struct{})
+					}
+					(*postureFailedPeers)[pname][pid] = struct{}{}
+					continue
 				}
-				(*postureFailedPeers)[pname][peer.ID] = struct{}{}
-				continue
 			}
 
-			if peer.ID == peerID {
+			if pid == peerID {
 				peerInGroups = true
 				continue
 			}
 
-			filteredPeerIDs = append(filteredPeerIDs, peer.ID)
+			filteredPeerIDs = append(filteredPeerIDs, pid)
 		}
 	}
 
@@ -445,6 +480,10 @@ func (a *Account) getPeersFromGroups(ctx context.Context, groups []string, peerI
 }
 
 func (a *Account) validatePostureChecksOnPeerGetFailed(ctx context.Context, sourcePostureChecksID []string, peerID string) (bool, string) {
+	if len(sourcePostureChecksID) == 0 {
+		return true, ""
+	}
+
 	peer, ok := a.Peers[peerID]
 	if !ok || peer == nil {
 		return false, ""

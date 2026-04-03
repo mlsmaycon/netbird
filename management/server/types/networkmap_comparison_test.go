@@ -63,6 +63,7 @@ func TestNetworkMapComponents_CompareWithLegacy(t *testing.T) {
 		resourcePolicies,
 		routers,
 		groupIDToUserIDs,
+		nil,
 	)
 
 	if components == nil {
@@ -118,6 +119,7 @@ func TestNetworkMapComponents_GoldenFileComparison(t *testing.T) {
 		resourcePolicies,
 		routers,
 		groupIDToUserIDs,
+		nil,
 	)
 
 	require.NotNil(t, components, "GetPeerNetworkMapComponents returned nil")
@@ -520,6 +522,7 @@ func BenchmarkComponentsNetworkMap(b *testing.B) {
 			resourcePolicies,
 			routers,
 			groupIDToUserIDs,
+			nil,
 		)
 		_ = CalculateNetworkMapFromComponents(ctx, components)
 	}
@@ -553,6 +556,7 @@ func BenchmarkComponentsCreation(b *testing.B) {
 			resourcePolicies,
 			routers,
 			groupIDToUserIDs,
+			nil,
 		)
 	}
 }
@@ -583,6 +587,7 @@ func BenchmarkCalculationFromComponents(b *testing.B) {
 		resourcePolicies,
 		routers,
 		groupIDToUserIDs,
+		nil,
 	)
 
 	b.ResetTimer()

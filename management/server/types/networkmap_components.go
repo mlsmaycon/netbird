@@ -45,6 +45,9 @@ type NetworkMapComponents struct {
 	PostureFailedPeers map[string]map[string]struct{}
 
 	RouterPeers map[string]*nbpeer.Peer
+
+	// PeerGroupsIndex is a reverse index from peer ID to group IDs for O(1) lookups.
+	PeerGroupsIndex map[string]LookupMap
 }
 
 type AccountSettingsInfo struct {
@@ -67,6 +70,14 @@ func (c *NetworkMapComponents) GetGroupInfo(groupID string) *Group {
 }
 
 func (c *NetworkMapComponents) IsPeerInGroup(peerID, groupID string) bool {
+	if c.PeerGroupsIndex != nil {
+		if groups, ok := c.PeerGroupsIndex[peerID]; ok {
+			_, found := groups[groupID]
+			return found
+		}
+		return false
+	}
+
 	group := c.GetGroupInfo(groupID)
 	if group == nil {
 		return false
@@ -76,6 +87,20 @@ func (c *NetworkMapComponents) IsPeerInGroup(peerID, groupID string) bool {
 }
 
 func (c *NetworkMapComponents) GetPeerGroups(peerID string) map[string]struct{} {
+	if c.PeerGroupsIndex != nil {
+		if allGroups, ok := c.PeerGroupsIndex[peerID]; ok {
+			// Filter to only groups that are in this component's relevant set
+			groups := make(map[string]struct{}, len(allGroups))
+			for groupID := range allGroups {
+				if _, relevant := c.Groups[groupID]; relevant {
+					groups[groupID] = struct{}{}
+				}
+			}
+			return groups
+		}
+		return make(map[string]struct{})
+	}
+
 	groups := make(map[string]struct{})
 	for groupID, group := range c.Groups {
 		if slices.Contains(group.Peers, peerID) {

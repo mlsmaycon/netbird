@@ -196,6 +196,7 @@ func (c *Controller) sendUpdateAccountPeers(ctx context.Context, accountID strin
 	resourcePolicies := account.GetResourcePoliciesMap()
 	routers := account.GetResourceRoutersMap()
 	groupIDToUserIDs := account.GetActiveGroupUsers()
+	peerGroupsIndex := account.BuildPeerGroupsIndex()
 
 	if c.experimentalNetworkMap(accountID) {
 		c.initNetworkMapBuilderIfNeeded(account, approvedPeersMap)
@@ -249,9 +250,9 @@ func (c *Controller) sendUpdateAccountPeers(ctx context.Context, accountID strin
 			case c.experimentalNetworkMap(accountID):
 				remotePeerNetworkMap = c.getPeerNetworkMapExp(ctx, p.AccountID, p.ID, approvedPeersMap, peersCustomZone, accountZones, c.accountManagerMetrics)
 			case c.compactedNetworkMap:
-				remotePeerNetworkMap = account.GetPeerNetworkMapFromComponents(ctx, p.ID, peersCustomZone, accountZones, approvedPeersMap, resourcePolicies, routers, c.accountManagerMetrics, groupIDToUserIDs)
+				remotePeerNetworkMap = account.GetPeerNetworkMapFromComponents(ctx, p.ID, peersCustomZone, accountZones, approvedPeersMap, resourcePolicies, routers, c.accountManagerMetrics, groupIDToUserIDs, peerGroupsIndex)
 			default:
-				remotePeerNetworkMap = account.GetPeerNetworkMap(ctx, p.ID, peersCustomZone, accountZones, approvedPeersMap, resourcePolicies, routers, c.accountManagerMetrics, groupIDToUserIDs)
+				remotePeerNetworkMap = account.GetPeerNetworkMap(ctx, p.ID, peersCustomZone, accountZones, approvedPeersMap, resourcePolicies, routers, c.accountManagerMetrics, groupIDToUserIDs, peerGroupsIndex)
 			}
 
 			c.metrics.CountCalcPeerNetworkMapDuration(time.Since(start))

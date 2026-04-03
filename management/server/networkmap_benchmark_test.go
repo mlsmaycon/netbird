@@ -124,6 +124,7 @@ func benchGetPeerNetworkMap(b *testing.B, peers, groups int, mode string) {
 	resourcePolicies := account.GetResourcePoliciesMap()
 	routers := account.GetResourceRoutersMap()
 	groupIDToUserIDs := account.GetActiveGroupUsers()
+	peerGroupsIndex := account.BuildPeerGroupsIndex()
 
 	// Pick a target peer in the middle of the account
 	targetPeerID := fmt.Sprintf("peer-%d", peers/2)
@@ -139,7 +140,7 @@ func benchGetPeerNetworkMap(b *testing.B, peers, groups int, mode string) {
 		case "legacy":
 			account.GetPeerNetworkMap(ctx, targetPeerID, peersCustomZone, nil, validatedPeersMap, resourcePolicies, routers, nil, groupIDToUserIDs)
 		case "compacted":
-			account.GetPeerNetworkMapFromComponents(ctx, targetPeerID, peersCustomZone, nil, validatedPeersMap, resourcePolicies, routers, nil, groupIDToUserIDs)
+			account.GetPeerNetworkMapFromComponents(ctx, targetPeerID, peersCustomZone, nil, validatedPeersMap, resourcePolicies, routers, nil, groupIDToUserIDs, peerGroupsIndex)
 		}
 	}
 
@@ -218,6 +219,7 @@ func BenchmarkFullUpdateCycleAllPeers(b *testing.B) {
 			resourcePolicies := account.GetResourcePoliciesMap()
 			routers := account.GetResourceRoutersMap()
 			groupIDToUserIDs := account.GetActiveGroupUsers()
+			peerGroupsIdx := account.BuildPeerGroupsIndex()
 
 			b.ResetTimer()
 			start := time.Now()
@@ -234,6 +236,7 @@ func BenchmarkFullUpdateCycleAllPeers(b *testing.B) {
 						routers,
 						nil,
 						groupIDToUserIDs,
+						peerGroupsIdx,
 					)
 				}
 			}
@@ -274,6 +277,7 @@ func BenchmarkNetworkMapScaling(b *testing.B) {
 			resourcePolicies := account.GetResourcePoliciesMap()
 			routers := account.GetResourceRoutersMap()
 			groupIDToUserIDs := account.GetActiveGroupUsers()
+			pgIdx := account.BuildPeerGroupsIndex()
 
 			targetPeerID := fmt.Sprintf("peer-%d", pc/2)
 
@@ -290,6 +294,7 @@ func BenchmarkNetworkMapScaling(b *testing.B) {
 					routers,
 					nil,
 					groupIDToUserIDs,
+					pgIdx,
 				)
 			}
 		})
@@ -651,6 +656,7 @@ func BenchmarkMemoryPerNetworkMap(b *testing.B) {
 			resourcePolicies := account.GetResourcePoliciesMap()
 			routers := account.GetResourceRoutersMap()
 			groupIDToUserIDs := account.GetActiveGroupUsers()
+			pgIdx := account.BuildPeerGroupsIndex()
 
 			targetPeerID := fmt.Sprintf("peer-%d", bc.peers/2)
 
@@ -668,6 +674,7 @@ func BenchmarkMemoryPerNetworkMap(b *testing.B) {
 					routers,
 					nil,
 					groupIDToUserIDs,
+					pgIdx,
 				)
 			}
 		})

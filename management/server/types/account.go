@@ -285,6 +285,7 @@ func (a *Account) GetPeerNetworkMap(
 	routers map[string]map[string]*routerTypes.NetworkRouter,
 	metrics *telemetry.AccountManagerMetrics,
 	groupIDToUserIDs map[string][]string,
+	peerGroupsIndex ...map[string]LookupMap,
 ) *NetworkMap {
 	start := time.Now()
 	peer := a.Peers[peerID]
@@ -300,7 +301,17 @@ func (a *Account) GetPeerNetworkMap(
 		}
 	}
 
-	peerGroups := a.GetPeerGroups(peerID)
+	var idx map[string]LookupMap
+	if len(peerGroupsIndex) > 0 {
+		idx = peerGroupsIndex[0]
+	}
+
+	var peerGroups LookupMap
+	if idx != nil {
+		peerGroups = a.GetPeerGroupsFromIndex(peerID, idx)
+	} else {
+		peerGroups = a.GetPeerGroups(peerID)
+	}
 
 	aclPeers, firewallRules, authorizedUsers, enableSSH := a.GetPeerConnectionResources(ctx, peer, validatedPeersMap, groupIDToUserIDs)
 	// exclude expired peers
@@ -822,6 +833,29 @@ func (a *Account) GetPeerGroups(peerID string) LookupMap {
 		}
 	}
 	return groupList
+}
+
+// BuildPeerGroupsIndex builds a reverse index from peer ID to the set of group IDs it belongs to.
+// This allows O(1) lookups instead of scanning all groups for each peer.
+func (a *Account) BuildPeerGroupsIndex() map[string]LookupMap {
+	index := make(map[string]LookupMap, len(a.Peers))
+	for groupID, group := range a.Groups {
+		for _, peerID := range group.Peers {
+			if _, ok := index[peerID]; !ok {
+				index[peerID] = make(LookupMap)
+			}
+			index[peerID][groupID] = struct{}{}
+		}
+	}
+	return index
+}
+
+// GetPeerGroupsFromIndex returns the set of groups a peer belongs to using a pre-built index.
+func (a *Account) GetPeerGroupsFromIndex(peerID string, index map[string]LookupMap) LookupMap {
+	if groups, ok := index[peerID]; ok {
+		return groups
+	}
+	return make(LookupMap)
 }
 
 func (a *Account) GetTakenIPs() []net.IP {
