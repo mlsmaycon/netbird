@@ -381,10 +381,10 @@ type routerProviderRoute struct {
 	// DiscoveryHost, when set, is the host serving this provider's model
 	// listing, for a vendor that does not serve it from the inference host.
 	DiscoveryHost string `json:"discovery_host,omitempty"`
-	// UserCredential marks a user_oauth provider: the route carries no
-	// credential, and the proxy fetches the calling user's own headers from
-	// management per request.
-	UserCredential bool `json:"user_credential,omitempty"`
+	// LinkedCredential marks a user_oauth provider: the route carries no
+	// credential, and the proxy fetches the headers of the provider's linked
+	// subscription login from management.
+	LinkedCredential bool `json:"linked_credential,omitempty"`
 	// RequestPathPrefix is the request path a user_oauth vendor's clients
 	// use. The router serves requests under it only from such routes, and
 	// keeps every other request off them.
@@ -480,7 +480,7 @@ func buildRouterConfigJSON(providers []*types.Provider, groupIndex map[string][]
 			GCPServiceAccountKeyB64: gcpSAKeyB64,
 			SkipTLSVerify:           p.SkipTLSVerification && !catalogEntry.UsesUserOAuth(),
 			DiscoveryHost:           discoveryHost(catalogEntry, p.UpstreamURL),
-			UserCredential:          catalogEntry.UsesUserOAuth(),
+			LinkedCredential:        catalogEntry.UsesUserOAuth(),
 			RequestPathPrefix:       userOAuthPathPrefix(catalogEntry),
 		})
 	}
@@ -493,8 +493,8 @@ func buildRouterConfigJSON(providers []*types.Provider, groupIndex map[string][]
 
 // routeUpstreamURL is where the router sends a provider's requests. A
 // user_oauth route always goes to the catalog's vendor host, whatever the
-// record says: the users' own tokens must never reach a host the vendor does
-// not own, even if a stored record predates the check that pins it.
+// record says: the linked login's token must never reach a host the vendor
+// does not own, even if a stored record predates the check that pins it.
 func routeUpstreamURL(p *types.Provider, entry catalog.Provider) string {
 	if entry.UsesUserOAuth() {
 		return "https://" + entry.DefaultHost
@@ -1117,8 +1117,8 @@ func providerAuthHeader(p *types.Provider) (name, value, gcpSAKeyB64 string, err
 	if entry.AuthHeaderName == "" || entry.AuthHeaderTemplate == "" {
 		return "", "", "", fmt.Errorf("catalog entry %q has no auth header configured", p.ProviderID)
 	}
-	// The credential is the calling user's own, fetched by the proxy per
-	// request; the route carries none, and SkipTLSVerify stays off.
+	// The credential is the provider's linked login, which the proxy fetches
+	// from management; the route carries none, and SkipTLSVerify stays off.
 	if entry.UsesUserOAuth() {
 		return entry.AuthHeaderName, "", "", nil
 	}

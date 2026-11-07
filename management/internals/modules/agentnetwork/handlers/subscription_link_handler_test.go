@@ -29,12 +29,18 @@ func TestCreateProvider_UserOAuthTakesNoAPIKey(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &created))
 	assert.Equal(t, "https://chatgpt.com", created.UpstreamUrl)
 
-	rec = f.do(t, http.MethodGet, "/agent-network/providers/"+created.Id+"/links", "")
+	require.NotNil(t, created.SubscriptionLink, "a ChatGPT provider should report its login state")
+	assert.Equal(t, api.AgentNetworkSubscriptionLinkStatusNotLinked, created.SubscriptionLink.Status)
+
+	rec = f.do(t, http.MethodGet, "/agent-network/providers/"+created.Id, "")
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	assert.JSONEq(t, `[]`, rec.Body.String())
+	var fetched api.AgentNetworkProvider
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &fetched))
+	require.NotNil(t, fetched.SubscriptionLink)
+	assert.Equal(t, api.AgentNetworkSubscriptionLinkStatusNotLinked, fetched.SubscriptionLink.Status)
 
 	// The fixture store has no encryption key, so linking is refused before
-	// the user is sent to the vendor.
+	// the admin is sent to the vendor.
 	rec = f.do(t, http.MethodPost, "/agent-network/providers/"+created.Id+"/link", "")
 	assert.Equal(t, http.StatusPreconditionFailed, rec.Code, rec.Body.String())
 

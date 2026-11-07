@@ -23,12 +23,12 @@ type fakeCredentialService struct {
 	calls  int
 }
 
-func (f *fakeCredentialService) GetUserCredentialAccess(_ context.Context, _, _, _ string) (*subscription.Access, error) {
+func (f *fakeCredentialService) GetProviderCredentialAccess(_ context.Context, _, _ string) (*subscription.Access, error) {
 	f.calls++
 	return f.access, f.err
 }
 
-func TestGetLLMUserCredential_ReturnsHeaders(t *testing.T) {
+func TestGetLLMProviderCredential_ReturnsHeaders(t *testing.T) {
 	expiry := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
 	fake := &fakeCredentialService{access: &subscription.Access{
 		Headers:   []subscription.Header{{Name: "Authorization", Value: "Bearer at"}, {Name: "chatgpt-account-id", Value: "acct"}},
@@ -37,30 +37,30 @@ func TestGetLLMUserCredential_ReturnsHeaders(t *testing.T) {
 	s := &ProxyServiceServer{}
 	s.SetAgentNetworkCredentialService(fake)
 
-	resp, err := s.GetLLMUserCredential(context.Background(), &proto.GetLLMUserCredentialRequest{AccountId: "acc", UserId: "u", ProviderId: "p"})
+	resp, err := s.GetLLMProviderCredential(context.Background(), &proto.GetLLMProviderCredentialRequest{AccountId: "acc", ProviderId: "p"})
 	require.NoError(t, err)
-	assert.Equal(t, proto.GetLLMUserCredentialResponse_OK, resp.GetStatus())
+	assert.Equal(t, proto.GetLLMProviderCredentialResponse_OK, resp.GetStatus())
 	require.Len(t, resp.GetHeaders(), 2)
 	assert.Equal(t, "chatgpt-account-id", resp.GetHeaders()[1].GetName())
 	assert.True(t, expiry.Equal(resp.GetExpiresAt().AsTime()), "expiry should round-trip")
 }
 
-func TestGetLLMUserCredential_MapsFailuresToStatus(t *testing.T) {
+func TestGetLLMProviderCredential_MapsFailuresToStatus(t *testing.T) {
 	cases := []struct {
 		name string
 		err  error
-		want proto.GetLLMUserCredentialResponse_Status
+		want proto.GetLLMProviderCredentialResponse_Status
 	}{
-		{"not linked", subscription.ErrNotLinked, proto.GetLLMUserCredentialResponse_NOT_LINKED},
-		{"provider not linkable", agentnetwork.ErrProviderNotLinkable, proto.GetLLMUserCredentialResponse_NOT_LINKED},
-		{"needs relink", subscription.ErrRelinkRequired, proto.GetLLMUserCredentialResponse_NEEDS_RELINK},
-		{"anything else", errors.New("vendor down"), proto.GetLLMUserCredentialResponse_UNAVAILABLE},
+		{"not linked", subscription.ErrNotLinked, proto.GetLLMProviderCredentialResponse_NOT_LINKED},
+		{"provider not linkable", agentnetwork.ErrProviderNotLinkable, proto.GetLLMProviderCredentialResponse_NOT_LINKED},
+		{"needs relink", subscription.ErrRelinkRequired, proto.GetLLMProviderCredentialResponse_NEEDS_RELINK},
+		{"anything else", errors.New("vendor down"), proto.GetLLMProviderCredentialResponse_UNAVAILABLE},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &ProxyServiceServer{}
 			s.SetAgentNetworkCredentialService(&fakeCredentialService{err: tc.err})
-			resp, err := s.GetLLMUserCredential(context.Background(), &proto.GetLLMUserCredentialRequest{AccountId: "acc", UserId: "u", ProviderId: "p"})
+			resp, err := s.GetLLMProviderCredential(context.Background(), &proto.GetLLMProviderCredentialRequest{AccountId: "acc", ProviderId: "p"})
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, resp.GetStatus())
 			assert.Empty(t, resp.GetHeaders(), "a failure must never carry headers")
@@ -68,20 +68,20 @@ func TestGetLLMUserCredential_MapsFailuresToStatus(t *testing.T) {
 	}
 }
 
-func TestGetLLMUserCredential_EnforcesAccountScope(t *testing.T) {
+func TestGetLLMProviderCredential_EnforcesAccountScope(t *testing.T) {
 	fake := &fakeCredentialService{}
 	s := &ProxyServiceServer{}
 	s.SetAgentNetworkCredentialService(fake)
 	scoped := "acc-1"
 	ctx := context.WithValue(context.Background(), ProxyTokenContextKey, &types.ProxyAccessToken{AccountID: &scoped})
 
-	_, err := s.GetLLMUserCredential(ctx, &proto.GetLLMUserCredentialRequest{AccountId: "acc-2", UserId: "u", ProviderId: "p"})
+	_, err := s.GetLLMProviderCredential(ctx, &proto.GetLLMProviderCredentialRequest{AccountId: "acc-2", ProviderId: "p"})
 	assert.Equal(t, codes.PermissionDenied, grpcstatus.Code(err), "an account-scoped proxy must not fetch another account's logins")
 	assert.Zero(t, fake.calls)
 }
 
-func TestGetLLMUserCredential_Unimplemented(t *testing.T) {
+func TestGetLLMProviderCredential_Unimplemented(t *testing.T) {
 	s := &ProxyServiceServer{}
-	_, err := s.GetLLMUserCredential(context.Background(), &proto.GetLLMUserCredentialRequest{AccountId: "acc", ProviderId: "p"})
+	_, err := s.GetLLMProviderCredential(context.Background(), &proto.GetLLMProviderCredentialRequest{AccountId: "acc", ProviderId: "p"})
 	assert.Equal(t, codes.Unimplemented, grpcstatus.Code(err))
 }

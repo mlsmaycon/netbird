@@ -79,13 +79,14 @@ type ProviderRoute struct {
 	// this route's upstream. For self-hosted / internal gateways behind a
 	// private or self-signed certificate.
 	SkipTLSVerify bool `json:"skip_tls_verify,omitempty"`
-	// UserCredential marks a route served with the caller's own subscription
-	// login. The route carries no credential: the router fetches the caller's
-	// headers from management per request and denies when there are none.
-	UserCredential bool `json:"user_credential,omitempty"`
+	// LinkedCredential marks a route served with the subscription login
+	// linked to its provider. The route carries no credential: the router
+	// fetches the login's headers from management and denies when there are
+	// none.
+	LinkedCredential bool `json:"linked_credential,omitempty"`
 	// RequestPathPrefix is the request path the route's clients use. Requests
 	// under it are served only by such routes, and these routes serve nothing
-	// else. A user-credential route without one is unreachable.
+	// else. A linked-login route without one is unreachable.
 	RequestPathPrefix string `json:"request_path_prefix,omitempty"`
 }
 

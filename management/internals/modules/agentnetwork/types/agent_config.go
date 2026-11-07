@@ -1,6 +1,10 @@
 package types
 
-import "time"
+import (
+	"time"
+
+	"github.com/netbirdio/netbird/shared/management/http/api"
+)
 
 // AgentConfig is the caller-scoped answer to "what may this caller
 // use on the Agent Network?" — the account's proxy endpoint plus the
@@ -46,12 +50,12 @@ type AgentConfigProvider struct {
 	Models []string
 	// CredentialKind is the catalog entry's credential kind.
 	CredentialKind string
-	// SubscriptionLink is the caller's own link state, set only for
+	// SubscriptionLink is the provider's linked-login state, set only for
 	// user_oauth providers.
 	SubscriptionLink *SubscriptionLinkState
 }
 
-// SubscriptionLinkStatus is the caller-facing state of a subscription login.
+// SubscriptionLinkStatus is the state of a provider's subscription login.
 type SubscriptionLinkStatus string
 
 const (
@@ -60,25 +64,54 @@ const (
 	SubscriptionNeedsRelink SubscriptionLinkStatus = "needs_relink"
 )
 
-// SubscriptionLinkState is one user's link state for one provider record.
-// It never carries tokens.
+// SubscriptionLinkState is the link state of one provider record. It never
+// carries tokens.
 type SubscriptionLinkState struct {
 	Status   SubscriptionLinkStatus
 	PlanType string
-	// LinkedAt is nil when nothing is linked.
-	LinkedAt *time.Time
+	// LinkedAt and LinkedBy are empty when nothing is linked.
+	LinkedAt        *time.Time
+	LinkedBy        string
+	LastRefreshedAt *time.Time
 }
 
 // LinkStateFromCredential maps a stored login (nil when absent) to its
-// caller-facing state.
-func LinkStateFromCredential(cred *UserCredential) *SubscriptionLinkState {
+// displayable state.
+func LinkStateFromCredential(cred *ProviderCredential) *SubscriptionLinkState {
 	if cred == nil {
 		return &SubscriptionLinkState{Status: SubscriptionNotLinked}
 	}
 	linkedAt := cred.CreatedAt
-	state := &SubscriptionLinkState{Status: SubscriptionLinked, PlanType: cred.PlanType, LinkedAt: &linkedAt}
-	if cred.Status != UserCredentialActive {
+	state := &SubscriptionLinkState{
+		Status:          SubscriptionLinked,
+		PlanType:        cred.PlanType,
+		LinkedAt:        &linkedAt,
+		LinkedBy:        cred.LinkedBy,
+		LastRefreshedAt: cred.LastRefreshedAt,
+	}
+	if cred.Status != CredentialActive {
 		state.Status = SubscriptionNeedsRelink
 	}
 	return state
+}
+
+// ToAPIResponse renders the link state for the API.
+func (l *SubscriptionLinkState) ToAPIResponse() *api.AgentNetworkSubscriptionLink {
+	if l == nil {
+		return nil
+	}
+	out := &api.AgentNetworkSubscriptionLink{
+		Status:          api.AgentNetworkSubscriptionLinkStatus(l.Status),
+		LinkedAt:        l.LinkedAt,
+		LastRefreshedAt: l.LastRefreshedAt,
+	}
+	if l.PlanType != "" {
+		plan := l.PlanType
+		out.PlanType = &plan
+	}
+	if l.LinkedBy != "" {
+		by := l.LinkedBy
+		out.LinkedBy = &by
+	}
+	return out
 }

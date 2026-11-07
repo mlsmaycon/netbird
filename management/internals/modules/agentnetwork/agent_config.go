@@ -27,23 +27,23 @@ func (m *managerImpl) GetAgentConfigForUser(ctx context.Context, accountID, user
 	if err != nil {
 		return nil, err
 	}
-	if err := m.attachLinkStates(ctx, accountID, userID, cfg); err != nil {
+	if err := m.attachConfigLinkStates(ctx, accountID, cfg); err != nil {
 		return nil, err
 	}
 	return cfg, nil
 }
 
-// attachLinkStates adds the caller's own link state to every user_oauth
-// provider in cfg, so the connect page can offer to link or relink.
-func (m *managerImpl) attachLinkStates(ctx context.Context, accountID, userID string, cfg *types.AgentConfig) error {
-	var states map[string]*types.UserCredential
+// attachConfigLinkStates adds each user_oauth provider's link state to cfg,
+// so the connect page can say when a login still has to be linked.
+func (m *managerImpl) attachConfigLinkStates(ctx context.Context, accountID string, cfg *types.AgentConfig) error {
+	var states map[string]*types.ProviderCredential
 	for i := range cfg.Providers {
 		p := &cfg.Providers[i]
 		if p.CredentialKind != string(catalog.CredentialUserOAuth) {
 			continue
 		}
 		if states == nil {
-			loaded, err := m.linkStates(ctx, accountID, userID)
+			loaded, err := m.linkStates(ctx, accountID)
 			if err != nil {
 				return err
 			}

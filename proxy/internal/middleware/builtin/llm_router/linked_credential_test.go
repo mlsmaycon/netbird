@@ -19,14 +19,14 @@ import (
 
 type fakeCredentialClient struct {
 	calls  atomic.Int32
-	status proto.GetLLMUserCredentialResponse_Status
+	status proto.GetLLMProviderCredentialResponse_Status
 	err    error
 	expiry time.Time
-	gotReq *proto.GetLLMUserCredentialRequest
+	gotReq *proto.GetLLMProviderCredentialRequest
 	mu     sync.Mutex
 }
 
-func (f *fakeCredentialClient) GetLLMUserCredential(_ context.Context, in *proto.GetLLMUserCredentialRequest, _ ...grpc.CallOption) (*proto.GetLLMUserCredentialResponse, error) {
+func (f *fakeCredentialClient) GetLLMProviderCredential(_ context.Context, in *proto.GetLLMProviderCredentialRequest, _ ...grpc.CallOption) (*proto.GetLLMProviderCredentialResponse, error) {
 	f.calls.Add(1)
 	f.mu.Lock()
 	f.gotReq = in
@@ -34,17 +34,17 @@ func (f *fakeCredentialClient) GetLLMUserCredential(_ context.Context, in *proto
 	if f.err != nil {
 		return nil, f.err
 	}
-	if f.status != proto.GetLLMUserCredentialResponse_OK {
-		return &proto.GetLLMUserCredentialResponse{Status: f.status}, nil
+	if f.status != proto.GetLLMProviderCredentialResponse_OK {
+		return &proto.GetLLMProviderCredentialResponse{Status: f.status}, nil
 	}
 	expiry := f.expiry
 	if expiry.IsZero() {
 		expiry = time.Now().Add(time.Hour)
 	}
-	return &proto.GetLLMUserCredentialResponse{
-		Status: proto.GetLLMUserCredentialResponse_OK,
+	return &proto.GetLLMProviderCredentialResponse{
+		Status: proto.GetLLMProviderCredentialResponse_OK,
 		Headers: []*proto.LLMCredentialHeader{
-			{Name: "Authorization", Value: "Bearer user-" + in.GetUserId()},
+			{Name: "Authorization", Value: "Bearer linked-" + in.GetProviderId()},
 			{Name: "chatgpt-account-id", Value: "acct-42"},
 		},
 		ExpiresAt: timestamppb.New(expiry),
@@ -60,7 +60,7 @@ func codexRoute() ProviderRoute {
 		UpstreamHost:      "chatgpt.com",
 		AuthHeaderName:    "Authorization",
 		AllowedGroupIDs:   []string{defaultTestGroup},
-		UserCredential:    true,
+		LinkedCredential:  true,
 		RequestPathPrefix: "/backend-api/codex",
 	}
 }
@@ -90,8 +90,8 @@ func newCodexRouter(client CredentialClient, routes ...ProviderRoute) *Middlewar
 	return newWithCredentials(Config{Providers: routes}, client, newCredentialCache())
 }
 
-func TestUserCredential_InjectsCallersOwnHeaders(t *testing.T) {
-	client := &fakeCredentialClient{status: proto.GetLLMUserCredentialResponse_OK}
+func TestLinkedCredential_InjectsLinkedLoginHeaders(t *testing.T) {
+	client := &fakeCredentialClient{status: proto.GetLLMProviderCredentialResponse_OK}
 	mw := newCodexRouter(client, openAICatchAll(), codexRoute())
 
 	out, err := mw.Invoke(context.Background(), codexInput("gpt-5.5", "/backend-api/codex/responses"))
@@ -102,10 +102,10 @@ func TestUserCredential_InjectsCallersOwnHeaders(t *testing.T) {
 	assert.Equal(t, "chatgpt.com", rw.Host, "the codex path should reach the subscription route, not the API catch-all")
 	assert.Nil(t, rw.AuthHeader, "no static credential may ride along")
 	assert.Equal(t, []middleware.AuthHeader{
-		{Name: "Authorization", Value: "Bearer user-user-1"},
+		{Name: "Authorization", Value: "Bearer linked-prov-chatgpt"},
 		{Name: "chatgpt-account-id", Value: "acct-42"},
 	}, rw.ExtraAuthHeaders)
-	assert.Contains(t, rw.StripHeaders, "chatgpt-account-id", "a client must not choose the account its token acts for")
+	assert.Contains(t, rw.StripHeaders, "chatgpt-account-id", "a client must not choose the account the login acts for")
 	assert.Contains(t, rw.StripHeaders, "X-OpenAI-Fedramp")
 	mode, _ := metaValue(t, out.Metadata, middleware.KeyLLMBillingMode)
 	assert.Equal(t, "subscription", mode)
@@ -113,12 +113,12 @@ func TestUserCredential_InjectsCallersOwnHeaders(t *testing.T) {
 	assert.Equal(t, "acc-1", client.gotReq.GetAccountId())
 }
 
-func TestUserCredential_RoutesStayApart(t *testing.T) {
-	client := &fakeCredentialClient{status: proto.GetLLMUserCredentialResponse_OK}
+func TestLinkedCredential_RoutesStayApart(t *testing.T) {
+	client := &fakeCredentialClient{status: proto.GetLLMProviderCredentialResponse_OK}
 
 	// With only the subscription route configured, a regular API request
 	// must not be served from it: chatgpt.com does not speak that API, and
-	// the user's subscription would be spent on traffic meant for a key.
+	// the plan would be spent on traffic meant for a key.
 	mw := newCodexRouter(client, codexRoute())
 	out, err := mw.Invoke(context.Background(), codexInput("gpt-5.5", "/v1/responses"))
 	require.NoError(t, err)
@@ -133,7 +133,7 @@ func TestUserCredential_RoutesStayApart(t *testing.T) {
 	assert.Zero(t, client.calls.Load(), "regular routes never ask for user credentials")
 }
 
-func TestUserCredential_DeniesWithoutUsableLogin(t *testing.T) {
+func TestLinkedCredential_DeniesWithoutUsableLogin(t *testing.T) {
 	cases := []struct {
 		name       string
 		client     CredentialClient
@@ -141,13 +141,12 @@ func TestUserCredential_DeniesWithoutUsableLogin(t *testing.T) {
 		wantStatus int
 		wantReason string
 	}{
-		{"not linked", &fakeCredentialClient{status: proto.GetLLMUserCredentialResponse_NOT_LINKED}, "user-1", 403, "not_linked"},
-		{"needs relink", &fakeCredentialClient{status: proto.GetLLMUserCredentialResponse_NEEDS_RELINK}, "user-1", 403, "needs_relink"},
-		{"management unavailable", &fakeCredentialClient{status: proto.GetLLMUserCredentialResponse_UNAVAILABLE}, "user-1", 503, "unavailable"},
+		{"not linked", &fakeCredentialClient{status: proto.GetLLMProviderCredentialResponse_NOT_LINKED}, "user-1", 403, "not_linked"},
+		{"needs relink", &fakeCredentialClient{status: proto.GetLLMProviderCredentialResponse_NEEDS_RELINK}, "user-1", 403, "needs_relink"},
+		{"management unavailable", &fakeCredentialClient{status: proto.GetLLMProviderCredentialResponse_UNAVAILABLE}, "user-1", 503, "unavailable"},
 		{"rpc error", &fakeCredentialClient{err: errors.New("boom")}, "user-1", 503, "unavailable"},
-		{"unknown status", &fakeCredentialClient{status: proto.GetLLMUserCredentialResponse_UNSPECIFIED}, "user-1", 503, "unavailable"},
+		{"unknown status", &fakeCredentialClient{status: proto.GetLLMProviderCredentialResponse_UNSPECIFIED}, "user-1", 503, "unavailable"},
 		{"no management client", nil, "user-1", 503, "unavailable"},
-		{"no user on the request", &fakeCredentialClient{status: proto.GetLLMUserCredentialResponse_OK}, "", 403, "not_linked"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -165,8 +164,8 @@ func TestUserCredential_DeniesWithoutUsableLogin(t *testing.T) {
 	}
 }
 
-func TestUserCredential_GroupsStillGate(t *testing.T) {
-	client := &fakeCredentialClient{status: proto.GetLLMUserCredentialResponse_OK}
+func TestLinkedCredential_GroupsStillGate(t *testing.T) {
+	client := &fakeCredentialClient{status: proto.GetLLMProviderCredentialResponse_OK}
 	mw := newCodexRouter(client, codexRoute())
 	in := codexInput("gpt-5.5", "/backend-api/codex/responses")
 	in.UserGroups = []string{"grp-other"}
@@ -178,8 +177,8 @@ func TestUserCredential_GroupsStillGate(t *testing.T) {
 	assert.Zero(t, client.calls.Load(), "an unauthorised caller must not trigger a credential lookup")
 }
 
-func TestUserCredential_ModellessListingAndMissingModel(t *testing.T) {
-	client := &fakeCredentialClient{status: proto.GetLLMUserCredentialResponse_OK}
+func TestLinkedCredential_ModellessListingAndMissingModel(t *testing.T) {
+	client := &fakeCredentialClient{status: proto.GetLLMProviderCredentialResponse_OK}
 	mw := newCodexRouter(client, codexRoute())
 
 	in := codexInput("", "/backend-api/codex/models?client_version=1")
@@ -196,10 +195,10 @@ func TestUserCredential_ModellessListingAndMissingModel(t *testing.T) {
 }
 
 // The cache lives outside the router, so a rebuilt router (one per mapping
-// push) keeps serving cached answers instead of sending everyone back to
+// push) keeps serving cached answers instead of sending every request back to
 // management, and answers stop being reused before the token expires.
-func TestUserCredential_CacheSurvivesRebuildAndHonoursExpiry(t *testing.T) {
-	client := &fakeCredentialClient{status: proto.GetLLMUserCredentialResponse_OK, expiry: time.Now().Add(3 * time.Minute)}
+func TestLinkedCredential_CacheSurvivesRebuildAndHonoursExpiry(t *testing.T) {
+	client := &fakeCredentialClient{status: proto.GetLLMProviderCredentialResponse_OK, expiry: time.Now().Add(3 * time.Minute)}
 	cache := newCredentialCache()
 	now := time.Now()
 	cache.now = func() time.Time { return now }
@@ -213,36 +212,50 @@ func TestUserCredential_CacheSurvivesRebuildAndHonoursExpiry(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), client.calls.Load(), "a rebuilt router should reuse the cached answer")
 
+	// The login is the provider's, so another user's request shares it.
+	in := codexInput("gpt-5.5", "/backend-api/codex/responses")
+	in.UserID = "user-2"
+	out, err := rebuilt.Invoke(context.Background(), in)
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer linked-prov-chatgpt", out.Mutations.RewriteUpstream.ExtraAuthHeaders[0].Value)
+	assert.Equal(t, int32(1), client.calls.Load(), "every caller of a provider shares one cached answer")
+
 	// The token expires in three minutes; it is not served within the last
 	// minute of its life.
 	now = now.Add(2*time.Minute + time.Second)
 	_, err = rebuilt.Invoke(context.Background(), codexInput("gpt-5.5", "/backend-api/codex/responses"))
 	require.NoError(t, err)
 	assert.Equal(t, int32(2), client.calls.Load(), "a token close to expiry should be fetched again")
-
-	// Another user never sees the first user's answer.
-	in := codexInput("gpt-5.5", "/backend-api/codex/responses")
-	in.UserID = "user-2"
-	out, err := rebuilt.Invoke(context.Background(), in)
-	require.NoError(t, err)
-	assert.Equal(t, "Bearer user-user-2", out.Mutations.RewriteUpstream.ExtraAuthHeaders[0].Value)
 }
 
-func TestUserCredential_FailuresAreNotCached(t *testing.T) {
-	client := &fakeCredentialClient{status: proto.GetLLMUserCredentialResponse_NOT_LINKED}
+// Agents on machines added with a setup key belong to no user; the shared
+// login serves them like anyone else the policy covers.
+func TestLinkedCredential_ServesRequestsWithoutUser(t *testing.T) {
+	client := &fakeCredentialClient{status: proto.GetLLMProviderCredentialResponse_OK}
+	mw := newCodexRouter(client, codexRoute())
+	in := codexInput("gpt-5.5", "/backend-api/codex/responses")
+	in.UserID = ""
+
+	out, err := mw.Invoke(context.Background(), in)
+	require.NoError(t, err)
+	assert.Equal(t, middleware.DecisionAllow, out.Decision)
+}
+
+func TestLinkedCredential_FailuresAreNotCached(t *testing.T) {
+	client := &fakeCredentialClient{status: proto.GetLLMProviderCredentialResponse_NOT_LINKED}
 	mw := newCodexRouter(client, codexRoute())
 	_, err := mw.Invoke(context.Background(), codexInput("gpt-5.5", "/backend-api/codex/responses"))
 	require.NoError(t, err)
 
 	// The user links; the very next request must see it.
-	client.status = proto.GetLLMUserCredentialResponse_OK
+	client.status = proto.GetLLMProviderCredentialResponse_OK
 	out, err := mw.Invoke(context.Background(), codexInput("gpt-5.5", "/backend-api/codex/responses"))
 	require.NoError(t, err)
 	assert.Equal(t, middleware.DecisionAllow, out.Decision)
 }
 
-func TestUserCredential_ConcurrentLookupsCollapse(t *testing.T) {
-	client := &fakeCredentialClient{status: proto.GetLLMUserCredentialResponse_OK}
+func TestLinkedCredential_ConcurrentLookupsCollapse(t *testing.T) {
+	client := &fakeCredentialClient{status: proto.GetLLMProviderCredentialResponse_OK}
 	mw := newCodexRouter(client, codexRoute())
 	var wg sync.WaitGroup
 	for i := 0; i < 32; i++ {

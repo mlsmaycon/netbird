@@ -8,30 +8,32 @@ import (
 	"github.com/netbirdio/netbird/util/crypt"
 )
 
-// UserCredentialStatus is the lifecycle state of a linked subscription login.
-type UserCredentialStatus string
+// CredentialStatus is the lifecycle state of a linked subscription login.
+type CredentialStatus string
 
 const (
-	// UserCredentialActive is a login management can refresh and serve.
-	UserCredentialActive UserCredentialStatus = "active"
-	// UserCredentialNeedsRelink is a login the vendor refused to refresh
+	// CredentialActive is a login management can refresh and serve.
+	CredentialActive CredentialStatus = "active"
+	// CredentialNeedsRelink is a login the vendor refused to refresh
 	// (reused, expired or revoked refresh token). Only a new login fixes it.
-	UserCredentialNeedsRelink UserCredentialStatus = "needs_relink"
+	CredentialNeedsRelink CredentialStatus = "needs_relink"
 )
 
 // ErrCredentialEncryptionUnavailable is returned when a subscription token
 // would be written or read without a configured field encryptor. Unlike the
 // provider api_key, these tokens are never stored in plaintext.
-var ErrCredentialEncryptionUnavailable = errors.New("agent network user credentials require a datastore encryption key")
+var ErrCredentialEncryptionUnavailable = errors.New("agent network provider credentials require a datastore encryption key")
 
-// UserCredential is one user's linked subscription login for one provider
-// record. Management is the only holder of the refresh token: the vendor
-// invalidates a login whose refresh token is presented twice, so the proxy
-// only ever receives short-lived access tokens derived from this row.
-type UserCredential struct {
+// ProviderCredential is the subscription login linked to one provider record.
+// It serves every request the provider's policies allow. Management is the
+// only holder of the refresh token: the vendor invalidates a login whose
+// refresh token is presented twice, so the proxy only ever receives
+// short-lived access tokens derived from this row.
+type ProviderCredential struct {
 	AccountID  string `gorm:"primaryKey"`
-	UserID     string `gorm:"primaryKey;index"`
-	ProviderID string `gorm:"primaryKey;index"`
+	ProviderID string `gorm:"primaryKey"`
+	// LinkedBy is the user who linked the current login.
+	LinkedBy string `gorm:"column:linked_by"`
 
 	RefreshToken    string    `gorm:"column:refresh_token"`
 	AccessToken     string    `gorm:"column:access_token"`
@@ -43,7 +45,7 @@ type UserCredential struct {
 	PlanType          string `gorm:"column:plan_type"`
 	FedRAMP           bool   `gorm:"column:fedramp"`
 
-	Status UserCredentialStatus `gorm:"column:status"`
+	Status CredentialStatus `gorm:"column:status"`
 	// Version is bumped on every write. Writers compare-and-swap on it so two
 	// management replicas cannot both act on the same refresh token.
 	Version int64 `gorm:"column:version"`
@@ -57,10 +59,10 @@ type UserCredential struct {
 }
 
 // TableName keeps the rows in their own table.
-func (UserCredential) TableName() string { return "agent_network_user_credentials" }
+func (ProviderCredential) TableName() string { return "agent_network_provider_credentials" }
 
 // Copy returns a deep copy.
-func (c *UserCredential) Copy() *UserCredential {
+func (c *ProviderCredential) Copy() *ProviderCredential {
 	clone := *c
 	if c.RefreshLeaseUntil != nil {
 		t := *c.RefreshLeaseUntil
@@ -74,13 +76,13 @@ func (c *UserCredential) Copy() *UserCredential {
 }
 
 // AccessValidFor reports whether the access token is usable for at least d.
-func (c *UserCredential) AccessValidFor(now time.Time, d time.Duration) bool {
-	return c.Status == UserCredentialActive && c.AccessToken != "" && c.AccessExpiresAt.After(now.Add(d))
+func (c *ProviderCredential) AccessValidFor(now time.Time, d time.Duration) bool {
+	return c.Status == CredentialActive && c.AccessToken != "" && c.AccessExpiresAt.After(now.Add(d))
 }
 
 // EncryptSensitiveData encrypts the tokens in place. It refuses to proceed
 // without an encryptor.
-func (c *UserCredential) EncryptSensitiveData(enc *crypt.FieldEncrypt) error {
+func (c *ProviderCredential) EncryptSensitiveData(enc *crypt.FieldEncrypt) error {
 	if enc == nil {
 		return ErrCredentialEncryptionUnavailable
 	}
@@ -90,7 +92,7 @@ func (c *UserCredential) EncryptSensitiveData(enc *crypt.FieldEncrypt) error {
 		}
 		encrypted, err := enc.Encrypt(*f)
 		if err != nil {
-			return fmt.Errorf("encrypt agent network user credential: %w", err)
+			return fmt.Errorf("encrypt agent network provider credential: %w", err)
 		}
 		*f = encrypted
 	}
@@ -99,7 +101,7 @@ func (c *UserCredential) EncryptSensitiveData(enc *crypt.FieldEncrypt) error {
 
 // DecryptSensitiveData decrypts the tokens in place. It refuses to proceed
 // without an encryptor.
-func (c *UserCredential) DecryptSensitiveData(enc *crypt.FieldEncrypt) error {
+func (c *ProviderCredential) DecryptSensitiveData(enc *crypt.FieldEncrypt) error {
 	if enc == nil {
 		return ErrCredentialEncryptionUnavailable
 	}
@@ -109,7 +111,7 @@ func (c *UserCredential) DecryptSensitiveData(enc *crypt.FieldEncrypt) error {
 		}
 		decrypted, err := enc.Decrypt(*f)
 		if err != nil {
-			return fmt.Errorf("decrypt agent network user credential: %w", err)
+			return fmt.Errorf("decrypt agent network provider credential: %w", err)
 		}
 		*f = decrypted
 	}

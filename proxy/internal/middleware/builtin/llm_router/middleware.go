@@ -76,11 +76,11 @@ var strippedAuthHeaders = []string{
 // llm.model metadata emitted by llm_request_parser.
 type Middleware struct {
 	cfg Config
-	// userRoutes are the routes served with the caller's own credential and
+	// linkedRoutes are the routes served with a provider's linked login and
 	// selected by request path; cfg.Providers holds the rest.
-	userRoutes []ProviderRoute
-	credClient CredentialClient
-	creds      *credentialCache
+	linkedRoutes []ProviderRoute
+	credClient   CredentialClient
+	creds        *credentialCache
 	// tokenSrc caches one auto-refreshing OAuth2 TokenSource per GCP
 	// service-account key (keyed by a hash of the key material), so Vertex
 	// token minting happens once and refreshes are amortised across requests.
@@ -95,25 +95,25 @@ func New(cfg Config) *Middleware {
 	return newWithCredentials(cfg, nil, sharedCredentials)
 }
 
-// newWithCredentials builds a router that can serve user_oauth routes through
+// newWithCredentials builds a router that serves linked-login routes through
 // client. A nil client makes every such route deny.
 func newWithCredentials(cfg Config, client CredentialClient, creds *credentialCache) *Middleware {
 	general := make([]ProviderRoute, 0, len(cfg.Providers))
-	var user []ProviderRoute
+	var linked []ProviderRoute
 	for _, r := range cfg.Providers {
-		if isUserCredentialRoute(r) {
-			user = append(user, r)
+		if isLinkedCredentialRoute(r) {
+			linked = append(linked, r)
 			continue
 		}
 		general = append(general, r)
 	}
 	cfg.Providers = general
 	return &Middleware{
-		cfg:        cfg,
-		userRoutes: user,
-		credClient: client,
-		creds:      creds,
-		tokenSrc:   map[string]oauth2.TokenSource{},
+		cfg:          cfg,
+		linkedRoutes: linked,
+		credClient:   client,
+		creds:        creds,
+		tokenSrc:     map[string]oauth2.TokenSource{},
 	}
 }
 
@@ -178,9 +178,9 @@ func (m *Middleware) Invoke(ctx context.Context, in *middleware.Input) (*middlew
 	model, _ := lookupMetadata(in.Metadata, middleware.KeyLLMModel)
 
 	// A subscription vendor's clients use their own path. Requests under it
-	// are served only by those routes, with the caller's own credential.
-	if routes := m.userCredentialRoutesFor(reqPath); len(routes) > 0 {
-		return m.routeUserCredential(ctx, in, routes, reqPath, surface, model), nil
+	// are served only by those routes, with the provider's linked login.
+	if routes := m.linkedRoutesFor(reqPath); len(routes) > 0 {
+		return m.routeLinkedCredential(ctx, in, routes, reqPath, surface, model), nil
 	}
 
 	// Vertex AI carries the model in the URL path, not the body, and is

@@ -40,15 +40,14 @@ const (
 	credentialUnavailable credentialFailure = "unavailable"
 )
 
-// CredentialClient is the management call llm_router makes for user_oauth
-// routes. builtin.MgmtClient satisfies it.
+// CredentialClient is the management call llm_router makes for routes served
+// with a linked login. builtin.MgmtClient satisfies it.
 type CredentialClient interface {
-	GetLLMUserCredential(ctx context.Context, in *proto.GetLLMUserCredentialRequest, opts ...grpc.CallOption) (*proto.GetLLMUserCredentialResponse, error)
+	GetLLMProviderCredential(ctx context.Context, in *proto.GetLLMProviderCredentialRequest, opts ...grpc.CallOption) (*proto.GetLLMProviderCredentialResponse, error)
 }
 
 type credentialKey struct {
 	accountID  string
-	userID     string
 	providerID string
 }
 
@@ -57,9 +56,9 @@ type cachedCredential struct {
 	until   time.Time
 }
 
-// credentialCache holds users' upstream headers across middleware rebuilds:
-// the router is rebuilt on every mapping push, and a per-instance cache would
-// send every user back to management after each one.
+// credentialCache holds linked logins' upstream headers across middleware
+// rebuilds: the router is rebuilt on every mapping push, and a per-instance
+// cache would send every request back to management after each one.
 type credentialCache struct {
 	mu      sync.Mutex
 	entries map[credentialKey]cachedCredential
@@ -120,17 +119,16 @@ func (c *credentialCache) evictLocked(now time.Time) {
 	}
 }
 
-// userHeaders returns the caller's upstream headers for a user_oauth route,
-// from cache or management. Anything other than a usable answer is a
-// failure; the caller denies on it.
-func (m *Middleware) userHeaders(ctx context.Context, accountID, userID, providerID string) ([]middleware.AuthHeader, credentialFailure) {
-	if userID == "" {
-		return nil, credentialNotLinked
-	}
+// linkedHeaders returns the upstream headers of the login linked to a
+// provider, from cache or management. Anything other than a usable answer is
+// a failure; the caller denies on it. No user is needed: the login serves
+// every request the route's policies allow, including those from machines
+// that belong to nobody.
+func (m *Middleware) linkedHeaders(ctx context.Context, accountID, providerID string) ([]middleware.AuthHeader, credentialFailure) {
 	if m.credClient == nil || m.creds == nil {
 		return nil, credentialUnavailable
 	}
-	key := credentialKey{accountID: accountID, userID: userID, providerID: providerID}
+	key := credentialKey{accountID: accountID, providerID: providerID}
 	if headers, ok := m.creds.get(key); ok {
 		return headers, ""
 	}
@@ -139,14 +137,13 @@ func (m *Middleware) userHeaders(ctx context.Context, accountID, userID, provide
 		headers []middleware.AuthHeader
 		failure credentialFailure
 	}
-	v, _, _ := m.creds.flight.Do(accountID+"\x00"+userID+"\x00"+providerID, func() (any, error) {
+	v, _, _ := m.creds.flight.Do(accountID+"\x00"+providerID, func() (any, error) {
 		// Detached from the request so one caller giving up does not fail
 		// the others waiting on the same lookup.
 		rpcCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), credentialRPCTimeout)
 		defer cancel()
-		resp, err := m.credClient.GetLLMUserCredential(rpcCtx, &proto.GetLLMUserCredentialRequest{
+		resp, err := m.credClient.GetLLMProviderCredential(rpcCtx, &proto.GetLLMProviderCredentialRequest{
 			AccountId:  accountID,
-			UserId:     userID,
 			ProviderId: providerID,
 		})
 		if err != nil {
@@ -162,12 +159,12 @@ func (m *Middleware) userHeaders(ctx context.Context, accountID, userID, provide
 	return r.headers, r.failure
 }
 
-func headersFromResponse(resp *proto.GetLLMUserCredentialResponse) ([]middleware.AuthHeader, credentialFailure) {
+func headersFromResponse(resp *proto.GetLLMProviderCredentialResponse) ([]middleware.AuthHeader, credentialFailure) {
 	switch resp.GetStatus() {
-	case proto.GetLLMUserCredentialResponse_OK:
-	case proto.GetLLMUserCredentialResponse_NOT_LINKED:
+	case proto.GetLLMProviderCredentialResponse_OK:
+	case proto.GetLLMProviderCredentialResponse_NOT_LINKED:
 		return nil, credentialNotLinked
-	case proto.GetLLMUserCredentialResponse_NEEDS_RELINK:
+	case proto.GetLLMProviderCredentialResponse_NEEDS_RELINK:
 		return nil, credentialNeedsRelink
 	default:
 		return nil, credentialUnavailable
@@ -185,18 +182,18 @@ func headersFromResponse(resp *proto.GetLLMUserCredentialResponse) ([]middleware
 	return headers, ""
 }
 
-// isUserCredentialRoute reports whether a route is served with the caller's
-// own credential and selected by request path. Such routes are kept out of
+// isLinkedCredentialRoute reports whether a route is served with a linked
+// login and selected by request path. Such routes are kept out of
 // the shared model table: their upstream speaks a different API.
-func isUserCredentialRoute(r ProviderRoute) bool {
-	return r.UserCredential || r.RequestPathPrefix != ""
+func isLinkedCredentialRoute(r ProviderRoute) bool {
+	return r.LinkedCredential || r.RequestPathPrefix != ""
 }
 
-// userCredentialRoutesFor returns the user-credential routes whose request
-// path prefix covers reqPath.
-func (m *Middleware) userCredentialRoutesFor(reqPath string) []ProviderRoute {
+// linkedRoutesFor returns the linked-login routes whose request path prefix
+// covers reqPath.
+func (m *Middleware) linkedRoutesFor(reqPath string) []ProviderRoute {
 	var out []ProviderRoute
-	for _, r := range m.userRoutes {
+	for _, r := range m.linkedRoutes {
 		if r.RequestPathPrefix != "" && pathPrefixMatches(r.RequestPathPrefix, reqPath) {
 			out = append(out, r)
 		}
@@ -204,17 +201,17 @@ func (m *Middleware) userCredentialRoutesFor(reqPath string) []ProviderRoute {
 	return out
 }
 
-// routeUserCredential serves a request under a user_oauth vendor's path: it
-// picks a route by model among those routes only, then attaches the caller's
-// own credential. Every failure to obtain it denies.
-func (m *Middleware) routeUserCredential(ctx context.Context, in *middleware.Input, routes []ProviderRoute, reqPath, surface, model string) *middleware.Output {
+// routeLinkedCredential serves a request under a user_oauth vendor's path: it
+// picks a route by model among those routes only, then attaches the
+// provider's linked login. Every failure to obtain it denies.
+func (m *Middleware) routeLinkedCredential(ctx context.Context, in *middleware.Input, routes []ProviderRoute, reqPath, surface, model string) *middleware.Output {
 	if model == "" {
 		if !isNonInferenceMethod(in.Method) {
 			return denyMissingModel(surface)
 		}
 		for _, r := range routes {
 			if routeAuthorisesGroups(r, in.UserGroups) {
-				out := m.allowUserCredential(ctx, in, r, surface)
+				out := m.allowLinkedCredential(ctx, in, r, surface)
 				if out.Decision == middleware.DecisionAllow {
 					markNonInference(out)
 				}
@@ -227,7 +224,7 @@ func (m *Middleware) routeUserCredential(ctx context.Context, in *middleware.Inp
 	route, outcome := matchRouteIn(routes, model, surface, reqPath, in.UserGroups)
 	switch outcome {
 	case matchOutcomeFound:
-		return m.allowUserCredential(ctx, in, route, surface)
+		return m.allowLinkedCredential(ctx, in, route, surface)
 	case matchOutcomeUnauthorised:
 		return denyNoAuthorisedRoute(surface, model)
 	default:
@@ -235,11 +232,11 @@ func (m *Middleware) routeUserCredential(ctx context.Context, in *middleware.Inp
 	}
 }
 
-func (m *Middleware) allowUserCredential(ctx context.Context, in *middleware.Input, route ProviderRoute, surface string) *middleware.Output {
-	if !route.UserCredential {
+func (m *Middleware) allowLinkedCredential(ctx context.Context, in *middleware.Input, route ProviderRoute, surface string) *middleware.Output {
+	if !route.LinkedCredential {
 		return m.allowWithRoute(route, surface, in.UserGroups)
 	}
-	headers, failure := m.userHeaders(ctx, in.AccountID, in.UserID, route.ID)
+	headers, failure := m.linkedHeaders(ctx, in.AccountID, route.ID)
 	if failure != "" {
 		return denyCredential(surface, failure)
 	}
@@ -255,18 +252,18 @@ func (m *Middleware) allowUserCredential(ctx context.Context, in *middleware.Inp
 	return out
 }
 
-// denyCredential refuses a user_oauth request the caller has no usable login
-// for. A missing or dead login is the caller's to fix (403); a management
-// failure is transient (503).
+// denyCredential refuses a request whose provider has no usable linked login.
+// A missing or dead login needs an administrator (403); a management failure
+// is transient (503).
 func denyCredential(surface string, failure credentialFailure) *middleware.Output {
 	statusCode := 403
-	message := "link your subscription for this provider on the NetBird dashboard (Agent Network, Connect)"
+	message := "no subscription login is linked to this provider; an administrator has to link one on the NetBird dashboard (Agent Network, Providers)"
 	switch failure {
 	case credentialNeedsRelink:
-		message = "your subscription login can no longer be refreshed; link it again on the NetBird dashboard (Agent Network, Connect)"
+		message = "the subscription login linked to this provider can no longer be refreshed; an administrator has to link it again on the NetBird dashboard (Agent Network, Providers)"
 	case credentialUnavailable:
 		statusCode = 503
-		message = "could not obtain your subscription credential, try again shortly"
+		message = "could not obtain the subscription credential, try again shortly"
 	}
 	return &middleware.Output{
 		Decision:   middleware.DecisionDeny,

@@ -20,7 +20,7 @@ import (
 // MgmtClient is the narrow slice of proto.ProxyServiceClient that
 // builtin middlewares may use during request / response handling.
 // The agent-network limit pair (llm_limit_check + llm_limit_record) and
-// llm_router's subscription credential lookup use it; declaring the surface
+// llm_router's linked-login lookup use it; declaring the surface
 // here keeps the dependency explicit at boot time.
 //
 // proto.ProxyServiceClient already satisfies this interface so server
@@ -28,9 +28,9 @@ import (
 type MgmtClient interface {
 	CheckLLMPolicyLimits(ctx context.Context, in *proto.CheckLLMPolicyLimitsRequest, opts ...grpc.CallOption) (*proto.CheckLLMPolicyLimitsResponse, error)
 	RecordLLMUsage(ctx context.Context, in *proto.RecordLLMUsageRequest, opts ...grpc.CallOption) (*proto.RecordLLMUsageResponse, error)
-	// GetLLMUserCredential fetches the calling user's own upstream headers
-	// for a subscription provider (llm_router, user_oauth routes).
-	GetLLMUserCredential(ctx context.Context, in *proto.GetLLMUserCredentialRequest, opts ...grpc.CallOption) (*proto.GetLLMUserCredentialResponse, error)
+	// GetLLMProviderCredential fetches the upstream headers of the login
+	// linked to a subscription provider (llm_router, user_oauth routes).
+	GetLLMProviderCredential(ctx context.Context, in *proto.GetLLMProviderCredentialRequest, opts ...grpc.CallOption) (*proto.GetLLMProviderCredentialResponse, error)
 }
 
 // defaultRegistry is the package-level registry that concrete builtin

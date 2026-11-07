@@ -43,7 +43,7 @@ func agentConfigToAPI(setup *types.AgentConfig) api.AgentNetworkAgentConfig {
 		providers = append(providers, api.AgentNetworkAgentConfigProvider{
 			Id:               p.ID,
 			CredentialKind:   api.AgentNetworkAgentConfigProviderCredentialKind(p.CredentialKind),
-			SubscriptionLink: subscriptionLinkToAPI(p.SubscriptionLink),
+			SubscriptionLink: p.SubscriptionLink.ToAPIResponse(),
 			Name:             p.Name,
 			CatalogId:        p.CatalogID,
 			ApiFlavor:        p.APIFlavor,

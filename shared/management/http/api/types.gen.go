@@ -182,24 +182,6 @@ func (e AgentNetworkProviderLinkFlowStatus) Valid() bool {
 	}
 }
 
-// Defines values for AgentNetworkProviderUserLinkStatus.
-const (
-	AgentNetworkProviderUserLinkStatusLinked      AgentNetworkProviderUserLinkStatus = "linked"
-	AgentNetworkProviderUserLinkStatusNeedsRelink AgentNetworkProviderUserLinkStatus = "needs_relink"
-)
-
-// Valid indicates whether the value is a known member of the AgentNetworkProviderUserLinkStatus enum.
-func (e AgentNetworkProviderUserLinkStatus) Valid() bool {
-	switch e {
-	case AgentNetworkProviderUserLinkStatusLinked:
-		return true
-	case AgentNetworkProviderUserLinkStatusNeedsRelink:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for AgentNetworkSubscriptionLinkStatus.
 const (
 	AgentNetworkSubscriptionLinkStatusLinked      AgentNetworkSubscriptionLinkStatus = "linked"
@@ -2062,7 +2044,7 @@ type AgentNetworkAgentConfigProvider struct {
 	// CredentialKind Where the upstream credential comes from; see AgentNetworkCatalogProvider.credential_kind.
 	CredentialKind AgentNetworkAgentConfigProviderCredentialKind `json:"credential_kind"`
 
-	// Id Provider record id, used by the subscription link endpoints.
+	// Id Provider record id.
 	Id string `json:"id"`
 
 	// Models The effective model allowlist for the caller (or the declared/catalog models when all_models_allowed is true).
@@ -2071,7 +2053,7 @@ type AgentNetworkAgentConfigProvider struct {
 	// Name Operator-assigned provider label.
 	Name string `json:"name"`
 
-	// SubscriptionLink The caller's own link state for a user_oauth provider. Never carries tokens.
+	// SubscriptionLink The state of a user_oauth provider's linked subscription login. One login serves every request the provider's policies allow. Never carries tokens.
 	SubscriptionLink *AgentNetworkSubscriptionLink `json:"subscription_link,omitempty"`
 }
 
@@ -2200,7 +2182,7 @@ type AgentNetworkCatalogProvider struct {
 	// CredentialKind Where the upstream credential comes from.
 	// "static_key" — the operator's api_key, sent as is.
 	// "gcp_service_account" — a static bearer, or a "keyfile::<base64 service-account JSON>" api_key the proxy mints Google tokens from.
-	// "user_oauth" — no operator key: each user links their own subscription login, see subscription_login.
+	// "user_oauth" — no API key: a subscription login is linked to the provider and shared by every request its policies allow, see subscription_login.
 	CredentialKind AgentNetworkCatalogProviderCredentialKind `json:"credential_kind"`
 
 	// DefaultContentType Default Content-Type for upstream requests.
@@ -2236,14 +2218,14 @@ type AgentNetworkCatalogProvider struct {
 	// PricingSurfaces Cost-meter pricing surfaces this provider's traffic is metered under ("openai", "anthropic", "bedrock"). Tells the dashboard which cache-rate fields apply to this provider's models: "openai" → cached_input_per_1k (cached prompt tokens are a subset of input); "anthropic"/"bedrock" → cache_read_per_1k + cache_creation_per_1k (additive buckets). Absent/empty for gateway and custom entries, whose upstream shape NetBird cannot know ahead of time — surface all cache fields for those.
 	PricingSurfaces *[]string `json:"pricing_surfaces,omitempty"`
 
-	// SubscriptionLogin How users link their own subscription for a user_oauth catalog entry.
+	// SubscriptionLogin How a subscription login is linked to a user_oauth provider.
 	SubscriptionLogin *AgentNetworkCatalogSubscriptionLogin `json:"subscription_login,omitempty"`
 }
 
 // AgentNetworkCatalogProviderCredentialKind Where the upstream credential comes from.
 // "static_key" — the operator's api_key, sent as is.
 // "gcp_service_account" — a static bearer, or a "keyfile::<base64 service-account JSON>" api_key the proxy mints Google tokens from.
-// "user_oauth" — no operator key: each user links their own subscription login, see subscription_login.
+// "user_oauth" — no API key: a subscription login is linked to the provider and shared by every request its policies allow, see subscription_login.
 type AgentNetworkCatalogProviderCredentialKind string
 
 // AgentNetworkCatalogProviderKind Presentation grouping for the provider Select on the dashboard.
@@ -2252,7 +2234,7 @@ type AgentNetworkCatalogProviderCredentialKind string
 // "custom" — generic OpenAI-compatible self-hosted endpoint catch-all.
 type AgentNetworkCatalogProviderKind string
 
-// AgentNetworkCatalogSubscriptionLogin How users link their own subscription for a user_oauth catalog entry.
+// AgentNetworkCatalogSubscriptionLogin How a subscription login is linked to a user_oauth provider.
 type AgentNetworkCatalogSubscriptionLogin struct {
 	// Flow "device" — the user enters a short code on the vendor's page (verification_uri) and the dashboard polls until they approve.
 	Flow AgentNetworkCatalogSubscriptionLoginFlow `json:"flow"`
@@ -2545,6 +2527,9 @@ type AgentNetworkProvider struct {
 	// SkipTlsVerification Whether upstream TLS certificate verification is skipped when the proxy dials this provider's URL. Intended for self-hosted / internal gateways behind a private or self-signed certificate.
 	SkipTlsVerification bool `json:"skip_tls_verification"`
 
+	// SubscriptionLink The state of a user_oauth provider's linked subscription login. One login serves every request the provider's policies allow. Never carries tokens.
+	SubscriptionLink *AgentNetworkSubscriptionLink `json:"subscription_link,omitempty"`
+
 	// UpdatedAt Timestamp when the provider was last updated.
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 
@@ -2605,7 +2590,7 @@ type AgentNetworkProviderModel struct {
 
 // AgentNetworkProviderRequest defines model for AgentNetworkProviderRequest.
 type AgentNetworkProviderRequest struct {
-	// ApiKey Upstream provider API key. Sealed at rest on the management server and never returned in responses. Required on create for every catalog entry whose credential_kind is not user_oauth; optional on update (omit to keep the existing key). Ignored for user_oauth entries, where each user links their own login instead.
+	// ApiKey Upstream provider API key. Sealed at rest on the management server and never returned in responses. Required on create for every catalog entry whose credential_kind is not user_oauth; optional on update (omit to keep the existing key). Refused for user_oauth entries, which use a linked subscription login instead.
 	ApiKey *string `json:"api_key,omitempty"`
 
 	// Enabled Whether the provider is enabled. Defaults to true on create.
@@ -2638,27 +2623,6 @@ type AgentNetworkProviderRequest struct {
 	// UpstreamUrl Full upstream URL (with scheme) that NetBird forwards traffic to.
 	UpstreamUrl string `json:"upstream_url"`
 }
-
-// AgentNetworkProviderUserLink One user's link state for a user_oauth provider, for administrators. Never carries tokens.
-type AgentNetworkProviderUserLink struct {
-	// LastRefreshedAt When management last refreshed the login's access token.
-	LastRefreshedAt *time.Time `json:"last_refreshed_at,omitempty"`
-
-	// LinkedAt When the login was linked.
-	LinkedAt time.Time `json:"linked_at"`
-
-	// PlanType The vendor plan reported for the login, when known.
-	PlanType *string `json:"plan_type,omitempty"`
-
-	// Status Whether the login can still be refreshed.
-	Status AgentNetworkProviderUserLinkStatus `json:"status"`
-
-	// UserId The user who linked the login.
-	UserId string `json:"user_id"`
-}
-
-// AgentNetworkProviderUserLinkStatus Whether the login can still be refreshed.
-type AgentNetworkProviderUserLinkStatus string
 
 // AgentNetworkSettings Per-account Agent Network gateway settings. One row per account; endpoint and proxy_address are assigned at bootstrap (POST) and immutable thereafter. Before bootstrap the account reads as the default values with empty endpoint and proxy_address.
 type AgentNetworkSettings struct {
@@ -2732,23 +2696,29 @@ type AgentNetworkSettingsRequest struct {
 	RedactPii bool `json:"redact_pii"`
 }
 
-// AgentNetworkSubscriptionLink The caller's own link state for a user_oauth provider. Never carries tokens.
+// AgentNetworkSubscriptionLink The state of a user_oauth provider's linked subscription login. One login serves every request the provider's policies allow. Never carries tokens.
 type AgentNetworkSubscriptionLink struct {
+	// LastRefreshedAt When management last refreshed the login's access token.
+	LastRefreshedAt *time.Time `json:"last_refreshed_at,omitempty"`
+
 	// LinkedAt When the current login was linked.
 	LinkedAt *time.Time `json:"linked_at,omitempty"`
+
+	// LinkedBy The user who linked the current login.
+	LinkedBy *string `json:"linked_by,omitempty"`
 
 	// PlanType The vendor plan reported at link or refresh time, when known.
 	PlanType *string `json:"plan_type,omitempty"`
 
-	// Status "linked" — requests go out under the caller's subscription.
-	// "not_linked" — the caller has not linked a login; requests are refused until they do.
-	// "needs_relink" — the vendor refused to refresh the login; the caller must link again.
+	// Status "linked" — requests go out under the linked subscription.
+	// "not_linked" — nobody has linked a login yet; requests are refused until someone who can edit the provider does.
+	// "needs_relink" — the vendor refused to refresh the login; it must be linked again.
 	Status AgentNetworkSubscriptionLinkStatus `json:"status"`
 }
 
-// AgentNetworkSubscriptionLinkStatus "linked" — requests go out under the caller's subscription.
-// "not_linked" — the caller has not linked a login; requests are refused until they do.
-// "needs_relink" — the vendor refused to refresh the login; the caller must link again.
+// AgentNetworkSubscriptionLinkStatus "linked" — requests go out under the linked subscription.
+// "not_linked" — nobody has linked a login yet; requests are refused until someone who can edit the provider does.
+// "needs_relink" — the vendor refused to refresh the login; it must be linked again.
 type AgentNetworkSubscriptionLinkStatus string
 
 // AgentNetworkUsageBucket One aggregated agent-network usage time bucket (UTC). The bucket width is set by the request's granularity.

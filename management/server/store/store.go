@@ -399,13 +399,11 @@ type Store interface {
 	GetAgentNetworkProviderByID(ctx context.Context, lockStrength LockingStrength, accountID, providerID string) (*agentNetworkTypes.Provider, error)
 	SaveAgentNetworkProvider(ctx context.Context, provider *agentNetworkTypes.Provider) error
 	DeleteAgentNetworkProvider(ctx context.Context, accountID, providerID string) error
-	GetAgentNetworkUserCredential(ctx context.Context, accountID, userID, providerID string) (*agentNetworkTypes.UserCredential, error)
-	GetAccountAgentNetworkUserCredentialStatuses(ctx context.Context, accountID string) ([]*agentNetworkTypes.UserCredential, error)
-	GetUserAgentNetworkCredentialStatuses(ctx context.Context, accountID, userID string) ([]*agentNetworkTypes.UserCredential, error)
-	LinkAgentNetworkUserCredential(ctx context.Context, cred *agentNetworkTypes.UserCredential) error
-	CompareAndSwapAgentNetworkUserCredential(ctx context.Context, cred *agentNetworkTypes.UserCredential, expectedVersion int64) (bool, error)
-	DeleteAgentNetworkUserCredential(ctx context.Context, accountID, userID, providerID string) error
-	DeleteAgentNetworkUserCredentialsForProvider(ctx context.Context, accountID, providerID string) error
+	GetAgentNetworkProviderCredential(ctx context.Context, accountID, providerID string) (*agentNetworkTypes.ProviderCredential, error)
+	GetAccountAgentNetworkProviderCredentialStatuses(ctx context.Context, accountID string) ([]*agentNetworkTypes.ProviderCredential, error)
+	LinkAgentNetworkProviderCredential(ctx context.Context, cred *agentNetworkTypes.ProviderCredential) error
+	CompareAndSwapAgentNetworkProviderCredential(ctx context.Context, cred *agentNetworkTypes.ProviderCredential, expectedVersion int64) (bool, error)
+	DeleteAgentNetworkProviderCredential(ctx context.Context, accountID, providerID string) error
 	GetAccountAgentNetworkPolicies(ctx context.Context, lockStrength LockingStrength, accountID string) ([]*agentNetworkTypes.Policy, error)
 	GetAgentNetworkPolicyByID(ctx context.Context, lockStrength LockingStrength, accountID, policyID string) (*agentNetworkTypes.Policy, error)
 	SaveAgentNetworkPolicy(ctx context.Context, policy *agentNetworkTypes.Policy) error

@@ -98,20 +98,18 @@ type Manager interface {
 	// the account-wide grant is missing.
 	GetAgentConfigForUser(ctx context.Context, accountID, userID string) (*types.AgentConfig, error)
 
-	// GetUserCredentialAccess returns the upstream headers for one user's
-	// linked subscription login, refreshing it when needed. It backs the
-	// proxy's GetLLMUserCredential RPC.
-	GetUserCredentialAccess(ctx context.Context, accountID, userID, providerID string) (*subscription.Access, error)
+	// GetProviderCredentialAccess returns the upstream headers of the
+	// subscription login linked to a provider, refreshing it when needed. It
+	// backs the proxy's GetLLMProviderCredential RPC.
+	GetProviderCredentialAccess(ctx context.Context, accountID, providerID string) (*subscription.Access, error)
 
 	// StartProviderLink, PollProviderLink and UnlinkProvider manage the
-	// caller's own subscription login for a user_oauth provider. They are
-	// caller-scoped: nobody can link or unlink a login for someone else.
+	// subscription login linked to a user_oauth provider. They need
+	// permission to update providers; a flow can only be polled by the user
+	// who started it.
 	StartProviderLink(ctx context.Context, accountID, userID, providerID string) (*subscription.Flow, error)
 	PollProviderLink(ctx context.Context, accountID, userID, providerID, flowID string) (*subscription.Flow, error)
 	UnlinkProvider(ctx context.Context, accountID, userID, providerID string) error
-	// ListProviderLinks lists every user's link state for a provider, without
-	// tokens, for callers who may read providers.
-	ListProviderLinks(ctx context.Context, accountID, userID, providerID string) ([]*types.UserCredential, error)
 }
 
 // PolicySelectionInput is the per-request selection envelope. The
@@ -241,13 +239,13 @@ func (m *managerImpl) GetAllProviders(ctx context.Context, accountID, userID str
 		return nil, status.NewPermissionValidationError(err)
 	}
 	if !ok {
-		return m.callerScopedProviders(ctx, accountID, userID)
+		return m.withLinkStates(ctx, accountID)(m.callerScopedProviders(ctx, accountID, userID))
 	}
 	providers, err := m.store.GetAccountAgentNetworkProviders(ctx, store.LockingStrengthNone, accountID)
 	if err != nil {
 		return nil, err
 	}
-	return m.redactProvidersForViewer(ctx, accountID, userID, providers)
+	return m.withLinkStates(ctx, accountID)(m.redactProvidersForViewer(ctx, accountID, userID, providers))
 }
 
 // GetProvider self-scopes like GetAllProviders: a caller without the read
@@ -266,7 +264,7 @@ func (m *managerImpl) GetProvider(ctx context.Context, accountID, userID, provid
 		}
 		for _, p := range scoped {
 			if p.ID == providerID {
-				return p, nil
+				return p, m.attachLinkStates(ctx, accountID, []*types.Provider{p})
 			}
 		}
 		return nil, status.NewAgentNetworkProviderNotFoundError(providerID)
@@ -279,7 +277,7 @@ func (m *managerImpl) GetProvider(ctx context.Context, accountID, userID, provid
 	if err != nil {
 		return nil, err
 	}
-	return redacted[0], nil
+	return redacted[0], m.attachLinkStates(ctx, accountID, redacted[:1])
 }
 
 // callerScopedProviders returns the providers the caller's own policies
@@ -288,6 +286,19 @@ func (m *managerImpl) GetProvider(ctx context.Context, accountID, userID, provid
 // role permission is needed: the answer is scoped strictly to the caller,
 // and a caller outside every policy gets an empty list, indistinguishable
 // from an account with nothing configured.
+// withLinkStates attaches link states to a provider listing on its way out.
+func (m *managerImpl) withLinkStates(ctx context.Context, accountID string) func([]*types.Provider, error) ([]*types.Provider, error) {
+	return func(providers []*types.Provider, err error) ([]*types.Provider, error) {
+		if err != nil {
+			return nil, err
+		}
+		if err := m.attachLinkStates(ctx, accountID, providers); err != nil {
+			return nil, err
+		}
+		return providers, nil
+	}
+}
+
 func (m *managerImpl) callerScopedProviders(ctx context.Context, accountID, userID string) ([]*types.Provider, error) {
 	user, err := m.store.GetUserByUserID(ctx, store.LockingStrengthNone, userID)
 	if err != nil {
@@ -410,8 +421,8 @@ func (m *managerImpl) CreateProvider(ctx context.Context, userID string, provide
 		return nil, err
 	}
 
-	if entry, ok := m.lookupCatalog(provider.ProviderID); ok && entry.UsesUserOAuth() {
-		// No operator credential to check: each user links their own login.
+	if entry, ok := m.catalogEntry(provider.ProviderID); ok && entry.UsesUserOAuth() {
+		// No API key to check: a subscription login is linked separately.
 		if err := pinUserOAuthProvider(provider, entry); err != nil {
 			return nil, err
 		}
@@ -454,7 +465,7 @@ func (m *managerImpl) CreateProvider(ctx context.Context, userID string, provide
 	m.accountManager.StoreEvent(ctx, userID, provider.ID, provider.AccountID, activity.AgentNetworkProviderCreated, provider.EventMeta())
 	m.reconcile(ctx, provider.AccountID)
 
-	return provider, nil
+	return provider, m.attachLinkStates(ctx, provider.AccountID, []*types.Provider{provider})
 }
 
 func (m *managerImpl) UpdateProvider(ctx context.Context, userID string, provider *types.Provider) (*types.Provider, error) {
@@ -488,7 +499,7 @@ func (m *managerImpl) UpdateProvider(ctx context.Context, userID string, provide
 	if m.leftUserOAuth(existing, provider) {
 		// Logins were for the old catalog entry's vendor; nothing may present
 		// them anywhere else.
-		if err := m.store.DeleteAgentNetworkUserCredentialsForProvider(ctx, provider.AccountID, provider.ID); err != nil {
+		if err := m.store.DeleteAgentNetworkProviderCredential(ctx, provider.AccountID, provider.ID); err != nil {
 			return nil, fmt.Errorf("delete subscription logins of retyped provider: %w", err)
 		}
 	}
@@ -496,7 +507,7 @@ func (m *managerImpl) UpdateProvider(ctx context.Context, userID string, provide
 	m.accountManager.StoreEvent(ctx, userID, provider.ID, provider.AccountID, activity.AgentNetworkProviderUpdated, provider.EventMeta())
 	m.reconcile(ctx, provider.AccountID)
 
-	return provider, nil
+	return provider, m.attachLinkStates(ctx, provider.AccountID, []*types.Provider{provider})
 }
 
 // leftUserOAuth reports whether an update moved a record off a user_oauth
@@ -505,7 +516,7 @@ func (m *managerImpl) leftUserOAuth(existing, updated *types.Provider) bool {
 	if existing.ProviderID == updated.ProviderID {
 		return false
 	}
-	entry, ok := m.lookupCatalog(existing.ProviderID)
+	entry, ok := m.catalogEntry(existing.ProviderID)
 	return ok && entry.UsesUserOAuth()
 }
 
@@ -514,7 +525,7 @@ func (m *managerImpl) leftUserOAuth(existing, updated *types.Provider) bool {
 // every other record keeps or rotates its key and is checked against the
 // vendor when the key, upstream or catalog entry changes.
 func (m *managerImpl) applyProviderCredentialUpdate(ctx context.Context, provider, existing *types.Provider) error {
-	if entry, ok := m.lookupCatalog(provider.ProviderID); ok && entry.UsesUserOAuth() {
+	if entry, ok := m.catalogEntry(provider.ProviderID); ok && entry.UsesUserOAuth() {
 		return pinUserOAuthProvider(provider, entry)
 	}
 

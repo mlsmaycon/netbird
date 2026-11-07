@@ -92,10 +92,10 @@ type AgentNetworkLimitsService interface {
 	RecordUsage(ctx context.Context, in agentnetwork.RecordUsageInput) error
 }
 
-// AgentNetworkCredentialService serves per-user subscription credentials for
-// GetLLMUserCredential.
+// AgentNetworkCredentialService serves the subscription logins linked to
+// providers, for GetLLMProviderCredential.
 type AgentNetworkCredentialService interface {
-	GetUserCredentialAccess(ctx context.Context, accountID, userID, providerID string) (*subscription.Access, error)
+	GetProviderCredentialAccess(ctx context.Context, accountID, providerID string) (*subscription.Access, error)
 }
 
 type ProxyServiceServer struct {
@@ -119,7 +119,7 @@ type ProxyServiceServer struct {
 	// and the post-flight consumption write (RecordLLMUsage). Optional — when
 	// nil both RPCs return Unimplemented.
 	agentNetworkLimits AgentNetworkLimitsService
-	// agentNetworkCredentials serves GetLLMUserCredential. Optional — when nil
+	// agentNetworkCredentials serves GetLLMProviderCredential. Optional — when nil
 	// the RPC returns Unimplemented.
 	agentNetworkCredentials AgentNetworkCredentialService
 	// connectAuthorizer authorizes address claims at proxy connect time.
@@ -313,8 +313,8 @@ func (s *ProxyServiceServer) SetAgentNetworkLimitsService(svc AgentNetworkLimits
 	s.mu.Unlock()
 }
 
-// SetAgentNetworkCredentialService wires the per-user subscription credential
-// source behind GetLLMUserCredential.
+// SetAgentNetworkCredentialService wires the provider subscription credential
+// source behind GetLLMProviderCredential.
 func (s *ProxyServiceServer) SetAgentNetworkCredentialService(svc AgentNetworkCredentialService) {
 	s.mu.Lock()
 	s.agentNetworkCredentials = svc
@@ -451,10 +451,11 @@ func (s *ProxyServiceServer) RecordLLMUsage(ctx context.Context, req *proto.Reco
 	return &proto.RecordLLMUsageResponse{}, nil
 }
 
-// GetLLMUserCredential returns the upstream headers for the user's linked
-// subscription login. Every outcome other than a usable token is reported in
-// the response status, never as headers, so the proxy can deny with a reason.
-func (s *ProxyServiceServer) GetLLMUserCredential(ctx context.Context, req *proto.GetLLMUserCredentialRequest) (*proto.GetLLMUserCredentialResponse, error) {
+// GetLLMProviderCredential returns the upstream headers of the subscription
+// login linked to a provider. Every outcome other than a usable token is
+// reported in the response status, never as headers, so the proxy can deny
+// with a reason.
+func (s *ProxyServiceServer) GetLLMProviderCredential(ctx context.Context, req *proto.GetLLMProviderCredentialRequest) (*proto.GetLLMProviderCredentialResponse, error) {
 	s.mu.RLock()
 	svc := s.agentNetworkCredentials
 	s.mu.RUnlock()
@@ -468,24 +469,24 @@ func (s *ProxyServiceServer) GetLLMUserCredential(ctx context.Context, req *prot
 		return nil, err
 	}
 
-	access, err := svc.GetUserCredentialAccess(ctx, req.GetAccountId(), req.GetUserId(), req.GetProviderId())
+	access, err := svc.GetProviderCredentialAccess(ctx, req.GetAccountId(), req.GetProviderId())
 	switch {
 	case err == nil:
 	case errors.Is(err, subscription.ErrNotLinked), errors.Is(err, agentnetwork.ErrProviderNotLinkable):
-		return &proto.GetLLMUserCredentialResponse{Status: proto.GetLLMUserCredentialResponse_NOT_LINKED}, nil
+		return &proto.GetLLMProviderCredentialResponse{Status: proto.GetLLMProviderCredentialResponse_NOT_LINKED}, nil
 	case errors.Is(err, subscription.ErrRelinkRequired):
-		return &proto.GetLLMUserCredentialResponse{Status: proto.GetLLMUserCredentialResponse_NEEDS_RELINK}, nil
+		return &proto.GetLLMProviderCredentialResponse{Status: proto.GetLLMProviderCredentialResponse_NEEDS_RELINK}, nil
 	default:
-		log.WithContext(ctx).Warnf("get agent network user credential for provider %s: %v", req.GetProviderId(), err)
-		return &proto.GetLLMUserCredentialResponse{Status: proto.GetLLMUserCredentialResponse_UNAVAILABLE}, nil
+		log.WithContext(ctx).Warnf("get agent network credential for provider %s: %v", req.GetProviderId(), err)
+		return &proto.GetLLMProviderCredentialResponse{Status: proto.GetLLMProviderCredentialResponse_UNAVAILABLE}, nil
 	}
 
 	headers := make([]*proto.LLMCredentialHeader, 0, len(access.Headers))
 	for _, h := range access.Headers {
 		headers = append(headers, &proto.LLMCredentialHeader{Name: h.Name, Value: h.Value})
 	}
-	return &proto.GetLLMUserCredentialResponse{
-		Status:    proto.GetLLMUserCredentialResponse_OK,
+	return &proto.GetLLMProviderCredentialResponse{
+		Status:    proto.GetLLMProviderCredentialResponse_OK,
 		Headers:   headers,
 		ExpiresAt: timestamppb.New(access.ExpiresAt),
 	}, nil

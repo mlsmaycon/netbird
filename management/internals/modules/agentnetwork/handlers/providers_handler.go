@@ -343,7 +343,7 @@ func validate(req *api.AgentNetworkProviderRequest, requireAPIKey bool) error {
 		// Each user links their own login; an operator key has no use and is
 		// refused rather than silently stored.
 		if req.ApiKey != nil && strings.TrimSpace(*req.ApiKey) != "" {
-			return status.Errorf(status.InvalidArgument, "api_key is not accepted for %s: each user links their own subscription", req.ProviderId)
+			return status.Errorf(status.InvalidArgument, "api_key is not accepted for %s: link a subscription login instead", req.ProviderId)
 		}
 		requireAPIKey = false
 	}

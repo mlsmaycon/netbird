@@ -139,7 +139,6 @@ var notExposed = []struct {
 			"POST /api/agent-network/providers/{providerId}/link",
 			"DELETE /api/agent-network/providers/{providerId}/link",
 			"GET /api/agent-network/providers/{providerId}/link/{flowId}",
-			"GET /api/agent-network/providers/{providerId}/links",
 			"GET /api/agent-network/settings",
 			"POST /api/agent-network/settings",
 			"PUT /api/agent-network/settings",

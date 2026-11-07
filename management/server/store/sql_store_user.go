@@ -13,7 +13,6 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	agentNetworkTypes "github.com/netbirdio/netbird/management/internals/modules/agentnetwork/types"
 	"github.com/netbirdio/netbird/management/server/types"
 	"github.com/netbirdio/netbird/shared/management/status"
 )
@@ -113,11 +112,6 @@ func (s *SqlStore) DeleteUser(ctx context.Context, accountID, userID string) err
 		result := tx.Delete(&types.PersonalAccessToken{}, "user_id = ?", userID)
 		if result.Error != nil {
 			return result.Error
-		}
-
-		// A deleted user's linked subscription logins must not outlive them.
-		if err := tx.Delete(&agentNetworkTypes.UserCredential{}, "account_id = ? AND user_id = ?", accountID, userID).Error; err != nil {
-			return err
 		}
 
 		return tx.Delete(&types.User{}, accountAndIDQueryCondition, accountID, userID).Error

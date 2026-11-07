@@ -71,19 +71,23 @@ the agent presents a proxy-issued key.
 
 ## Codex on a ChatGPT plan
 
-The **ChatGPT (Codex)** provider lets each user run Codex on their own ChatGPT
-plan instead of an API key. An administrator adds the provider without a key
-and authorises it with a policy as usual. Each user then links their own
-ChatGPT login from **Agent Network > Connect**: NetBird shows a short code to
-enter at `https://auth.openai.com/codex/device`, and the dashboard finishes
-once they approve. OpenAI has authorised NetBird to hold these logins.
+An OpenAI provider can authenticate with an API key or with a ChatGPT login.
+With a ChatGPT login, an administrator links a ChatGPT account to the provider
+while adding it: NetBird shows a short code to enter at
+`https://auth.openai.com/codex/device`, and the form finishes once they
+approve. OpenAI has authorised NetBird to hold these logins.
 
-Management is the only component that ever holds or refreshes a user's ChatGPT
-login, because OpenAI ends a login whose refresh token is used twice. The proxy
-receives short-lived access tokens per request and machines never receive any
-ChatGPT credential, so the same login works from every machine the user has.
-Usage on this provider is recorded in tokens but not priced at API rates, since
-it is billed to the user's plan.
+The linked login is shared: every request the provider's policies allow,
+from any user or machine they cover, goes to OpenAI under that one ChatGPT
+plan and counts against its usage limits. What NetBird adds is the view of
+that usage: requests, tokens, models and sessions are recorded per user and
+per machine, exactly as for an API-key provider.
+
+Management is the only component that ever holds or refreshes the login,
+because OpenAI ends a login whose refresh token is used twice. The proxy
+receives short-lived access tokens, and agents never receive any ChatGPT
+credential. Usage on this provider is recorded in tokens but not priced at
+API rates, since it is billed to the plan.
 
 Point Codex at the endpoint in `~/.codex/config.toml`. Codex ignores provider
 settings in a project-level config, so they must go in the user's own file:
@@ -97,15 +101,14 @@ base_url = "https://<your-endpoint>/backend-api/codex"
 wire_api = "responses"
 ```
 
-No key is needed: the proxy identifies the user through the NetBird tunnel and
-replaces any credential the client sends. Do not set `openai_base_url` or
-`requires_openai_auth = true` for this provider. Either makes Codex send the
-user's local ChatGPT token to the endpoint, which is exactly what this provider
-exists to avoid.
+No key is needed: the proxy authorises the caller through the NetBird tunnel
+and replaces any credential the client sends. Do not set `openai_base_url`
+or `requires_openai_auth = true` for this provider; either makes Codex send
+the machine's own local ChatGPT token to the endpoint.
 
-A request from a user who has not linked, or whose login OpenAI no longer
-refreshes, is refused with `llm_policy.credential_not_linked` until they link
-again.
+Until a login is linked, or after OpenAI stops refreshing it, requests are
+refused with `llm_policy.credential_not_linked`, and the provider shows the
+login as not linked or needing to be linked again.
 
 ## Architecture 
 

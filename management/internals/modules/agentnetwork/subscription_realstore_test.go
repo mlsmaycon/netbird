@@ -87,9 +87,9 @@ type subscriptionFixture struct {
 }
 
 const (
-	subAdmin = "admin-1"
-	subUser  = "user-1"
-	subOther = "user-2"
+	subAdmin  = "admin-1"
+	subAdmin2 = "admin-2"
+	subUser   = "user-1"
 )
 
 func newSubscriptionFixture(t *testing.T, encrypted bool) *subscriptionFixture {
@@ -110,7 +110,7 @@ func newSubscriptionFixture(t *testing.T, encrypted bool) *subscriptionFixture {
 	require.NoError(t, s.SaveAccount(ctx, &nbtypes.Account{Id: testAccountID}))
 	require.NoError(t, s.SaveUser(ctx, &nbtypes.User{Id: subAdmin, AccountID: testAccountID, Role: nbtypes.UserRoleAdmin}))
 	require.NoError(t, s.SaveUser(ctx, &nbtypes.User{Id: subUser, AccountID: testAccountID, Role: nbtypes.UserRoleUser, AutoGroups: []string{"grp-eng"}}))
-	require.NoError(t, s.SaveUser(ctx, &nbtypes.User{Id: subOther, AccountID: testAccountID, Role: nbtypes.UserRoleUser, AutoGroups: []string{"grp-sales"}}))
+	require.NoError(t, s.SaveUser(ctx, &nbtypes.User{Id: subAdmin2, AccountID: testAccountID, Role: nbtypes.UserRoleAdmin}))
 	require.NoError(t, s.SaveAgentNetworkSettings(ctx, newSynthTestSettings()))
 
 	issuer, _ := fakeOpenAIAuth(t)
@@ -181,8 +181,10 @@ func TestSubscription_LinkServeUnlink(t *testing.T) {
 	ctx := context.Background()
 	f := newSubscriptionFixture(t, true)
 	provider := f.createCodexProvider(t)
+	assert.Equal(t, types.SubscriptionNotLinked, provider.SubscriptionLink.Status, "a new provider has no login yet")
 
-	flow, err := f.mgr.StartProviderLink(ctx, testAccountID, subUser, provider.ID)
+	// The admin links the provider's login while setting it up.
+	flow, err := f.mgr.StartProviderLink(ctx, testAccountID, subAdmin, provider.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "WXYZ-0001", flow.UserCode)
 	assert.Equal(t, subscription.FlowPending, flow.Status)
@@ -190,101 +192,92 @@ func TestSubscription_LinkServeUnlink(t *testing.T) {
 	// The fake issues a one second interval; the service will not poll the
 	// vendor sooner.
 	time.Sleep(1100 * time.Millisecond)
-	flow, err = f.mgr.PollProviderLink(ctx, testAccountID, subUser, provider.ID, flow.ID)
+	flow, err = f.mgr.PollProviderLink(ctx, testAccountID, subAdmin, provider.ID, flow.ID)
 	require.NoError(t, err)
 	require.Equal(t, subscription.FlowLinked, flow.Status)
 	assert.Contains(t, *f.events, activity.AgentNetworkSubscriptionLinked, "linking should be audited")
 
+	got, err := f.mgr.GetProvider(ctx, testAccountID, subAdmin, provider.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.SubscriptionLink)
+	assert.Equal(t, types.SubscriptionLinked, got.SubscriptionLink.Status)
+	assert.Equal(t, subAdmin, got.SubscriptionLink.LinkedBy)
+	assert.Equal(t, "plus", got.SubscriptionLink.PlanType)
+
+	// Every user the policy covers sees the shared login as linked.
 	cfg, err := f.mgr.GetAgentConfigForUser(ctx, testAccountID, subUser)
 	require.NoError(t, err)
 	require.Len(t, cfg.Providers, 1)
-	assert.Equal(t, provider.ID, cfg.Providers[0].ID)
 	assert.Equal(t, "user_oauth", cfg.Providers[0].CredentialKind)
-	require.NotNil(t, cfg.Providers[0].SubscriptionLink)
 	assert.Equal(t, types.SubscriptionLinked, cfg.Providers[0].SubscriptionLink.Status)
-	assert.Equal(t, "plus", cfg.Providers[0].SubscriptionLink.PlanType)
 
-	access, err := f.mgr.GetUserCredentialAccess(ctx, testAccountID, subUser, provider.ID)
+	// The proxy gets the provider's headers with no user at all, so agents on
+	// machines that belong to nobody are served too.
+	access, err := f.mgr.GetProviderCredentialAccess(ctx, testAccountID, provider.ID)
 	require.NoError(t, err)
 	assert.Contains(t, access.Headers, subscription.Header{Name: "chatgpt-account-id", Value: "acct-42"})
 
 	// The router route carries no credential, only the marker that makes the
-	// proxy fetch the user's own, and is pinned to the vendor host.
+	// proxy fetch it, and is pinned to the vendor host.
 	services, err := SynthesizeServices(ctx, f.store, testAccountID)
 	require.NoError(t, err)
 	require.Len(t, services, 1)
 	router := decodeServiceRouterConfig(t, services[0])
 	require.Len(t, router.Providers, 1)
 	route := router.Providers[0]
-	assert.True(t, route.UserCredential)
+	assert.True(t, route.LinkedCredential)
 	assert.Equal(t, "/backend-api/codex", route.RequestPathPrefix)
 	assert.Equal(t, "chatgpt.com", route.UpstreamHost)
-	assert.Empty(t, route.AuthHeaderValue, "the shared router config must never carry a user's token")
+	assert.Empty(t, route.AuthHeaderValue, "the router config must never carry the login's token")
 
-	require.NoError(t, f.mgr.UnlinkProvider(ctx, testAccountID, subUser, provider.ID))
-	_, err = f.mgr.GetUserCredentialAccess(ctx, testAccountID, subUser, provider.ID)
+	require.NoError(t, f.mgr.UnlinkProvider(ctx, testAccountID, subAdmin, provider.ID))
+	_, err = f.mgr.GetProviderCredentialAccess(ctx, testAccountID, provider.ID)
 	assert.ErrorIs(t, err, subscription.ErrNotLinked)
-	cfg, err = f.mgr.GetAgentConfigForUser(ctx, testAccountID, subUser)
-	require.NoError(t, err)
-	assert.Equal(t, types.SubscriptionNotLinked, cfg.Providers[0].SubscriptionLink.Status)
 	assert.Contains(t, *f.events, activity.AgentNetworkSubscriptionUnlinked, "unlinking should be audited")
 }
 
-func TestSubscription_CallerScope(t *testing.T) {
+func TestSubscription_LinkingNeedsProviderEditRights(t *testing.T) {
 	ctx := context.Background()
 	f := newSubscriptionFixture(t, true)
 	provider := f.createCodexProvider(t)
 
-	_, err := f.mgr.StartProviderLink(ctx, testAccountID, subOther, provider.ID)
-	assert.Equal(t, status.NotFound, statusType(err), "a user no policy covers must not be able to link")
+	_, err := f.mgr.StartProviderLink(ctx, testAccountID, subUser, provider.ID)
+	assert.Equal(t, status.PermissionDenied, statusType(err), "a regular user must not link the shared login")
+	err = f.mgr.UnlinkProvider(ctx, testAccountID, subUser, provider.ID)
+	assert.Equal(t, status.PermissionDenied, statusType(err), "a regular user must not unlink the shared login")
 
-	flow, err := f.mgr.StartProviderLink(ctx, testAccountID, subUser, provider.ID)
+	flow, err := f.mgr.StartProviderLink(ctx, testAccountID, subAdmin, provider.ID)
 	require.NoError(t, err)
-	_, err = f.mgr.PollProviderLink(ctx, testAccountID, subAdmin, provider.ID, flow.ID)
-	assert.Error(t, err, "nobody else may complete a user's flow, not even an admin")
-
-	_, err = f.mgr.ListProviderLinks(ctx, testAccountID, subUser, provider.ID)
-	assert.Equal(t, status.PermissionDenied, statusType(err), "listing everyone's links needs the providers read grant")
-	links, err := f.mgr.ListProviderLinks(ctx, testAccountID, subAdmin, provider.ID)
-	require.NoError(t, err)
-	assert.Empty(t, links)
-
-	// Revoking the user's policy access also stops management serving their
-	// login to the proxy.
-	require.NoError(t, f.store.LinkAgentNetworkUserCredential(ctx, &types.UserCredential{
-		AccountID: testAccountID, UserID: subOther, ProviderID: provider.ID,
-		RefreshToken: "rt", AccessToken: "at", AccessExpiresAt: time.Now().Add(time.Hour), Status: types.UserCredentialActive,
-	}))
-	_, err = f.mgr.GetUserCredentialAccess(ctx, testAccountID, subOther, provider.ID)
-	assert.ErrorIs(t, err, subscription.ErrNotLinked)
+	_, err = f.mgr.PollProviderLink(ctx, testAccountID, subAdmin2, provider.ID, flow.ID)
+	assert.Equal(t, status.NotFound, statusType(err), "a flow can only be completed by the admin who started it")
 }
 
-func TestSubscription_RetypingProviderDropsLogins(t *testing.T) {
+func TestSubscription_RetypingProviderDropsLogin(t *testing.T) {
 	ctx := context.Background()
 	f := newSubscriptionFixture(t, true)
 	provider := f.createCodexProvider(t)
-	require.NoError(t, f.store.LinkAgentNetworkUserCredential(ctx, &types.UserCredential{
-		AccountID: testAccountID, UserID: subUser, ProviderID: provider.ID,
-		RefreshToken: "rt", Status: types.UserCredentialActive,
+	require.NoError(t, f.store.LinkAgentNetworkProviderCredential(ctx, &types.ProviderCredential{
+		AccountID: testAccountID, ProviderID: provider.ID, LinkedBy: subAdmin,
+		RefreshToken: "rt", Status: types.CredentialActive,
 	}))
 
 	update := provider.Copy()
 	update.ProviderID = "openai_api"
 	update.UpstreamURL = "https://api.openai.com"
 	_, err := f.mgr.UpdateProvider(ctx, subAdmin, update)
-	assert.Equal(t, status.InvalidArgument, statusType(err), "leaving user_oauth needs an operator key")
+	assert.Equal(t, status.InvalidArgument, statusType(err), "leaving user_oauth needs an API key")
 
 	update.APIKey = "sk-operator"
 	_, err = f.mgr.UpdateProvider(ctx, subAdmin, update)
 	require.NoError(t, err)
-	links, err := f.store.GetAccountAgentNetworkUserCredentialStatuses(ctx, testAccountID)
+	links, err := f.store.GetAccountAgentNetworkProviderCredentialStatuses(ctx, testAccountID)
 	require.NoError(t, err)
-	assert.Empty(t, links, "logins for the old vendor must not survive a retype")
+	assert.Empty(t, links, "the old vendor's login must not survive a retype")
 }
 
 func TestSubscription_RequiresEncryptionKey(t *testing.T) {
 	f := newSubscriptionFixture(t, false)
 	provider := f.createCodexProvider(t)
-	_, err := f.mgr.StartProviderLink(context.Background(), testAccountID, subUser, provider.ID)
+	_, err := f.mgr.StartProviderLink(context.Background(), testAccountID, subAdmin, provider.ID)
 	assert.Equal(t, status.PreconditionFailed, statusType(err), "linking must be refused up front without an encryption key")
 }

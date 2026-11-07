@@ -149,9 +149,9 @@ const (
 	// "keyfile::<base64 service-account JSON>" api_key, from which the proxy
 	// mints short-lived Google OAuth tokens.
 	CredentialGCPServiceAccount CredentialKind = "gcp_service_account" //nolint:gosec // kind label, not a credential
-	// CredentialUserOAuth carries no operator credential: every user links
-	// their own subscription login, which management holds and refreshes, and
-	// the proxy fetches that user's short-lived access token per request.
+	// CredentialUserOAuth carries no API key: a subscription login is linked
+	// to the provider, management holds and refreshes it, and the proxy fetches
+	// its short-lived access token for the requests it serves.
 	CredentialUserOAuth CredentialKind = "user_oauth" //nolint:gosec // kind label, not a credential
 )
 
@@ -181,8 +181,8 @@ func (p Provider) EffectiveCredentialKind() CredentialKind {
 	return p.CredentialKind
 }
 
-// UsesUserOAuth reports whether each user links their own login for this
-// entry instead of the operator supplying an api_key.
+// UsesUserOAuth reports whether a subscription login is linked to records of
+// this entry instead of an api_key.
 func (p Provider) UsesUserOAuth() bool {
 	return p.EffectiveCredentialKind() == CredentialUserOAuth && p.OAuth != nil
 }
@@ -455,14 +455,16 @@ var providers = []Provider{
 		},
 	},
 	{
-		// ChatGPT plans include Codex usage. NetBird holds each user's own
-		// ChatGPT login (OpenAI has authorised this for NetBird) and the proxy
-		// presents it upstream, so no operator key exists. Codex's public
-		// client id only accepts loopback redirects, hence the device flow.
+		// ChatGPT plans include Codex usage. An administrator links a
+		// ChatGPT login to the provider (OpenAI has authorised this for
+		// NetBird); management holds it and the proxy presents it upstream
+		// for every request the provider's policies allow, so no API key
+		// exists. Codex's public client id only accepts loopback redirects,
+		// hence the device flow.
 		ID:                 "chatgpt_codex",
 		Kind:               KindProvider,
-		Name:               "ChatGPT (Codex)",
-		Description:        "Codex on each user's own ChatGPT plan",
+		Name:               "OpenAI (ChatGPT login)",
+		Description:        "Codex on a ChatGPT plan, shared through one linked login",
 		DefaultHost:        "chatgpt.com",
 		AuthHeaderName:     "Authorization",
 		AuthHeaderTemplate: "Bearer ${API_KEY}",

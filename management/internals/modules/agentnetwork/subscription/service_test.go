@@ -174,19 +174,21 @@ func newTestCache(t *testing.T) nbcache.Store {
 	return c
 }
 
-var testKey = Key{AccountID: "acc-1", UserID: "user-1", ProviderID: "prov-1"}
+var testKey = Key{AccountID: "acc-1", ProviderID: "prov-1"}
+
+const testAdmin = "admin-1"
 
 func seedCredential(t *testing.T, s store.Store, accessExpiry time.Time) {
 	t.Helper()
-	require.NoError(t, s.LinkAgentNetworkUserCredential(context.Background(), &types.UserCredential{
+	require.NoError(t, s.LinkAgentNetworkProviderCredential(context.Background(), &types.ProviderCredential{
 		AccountID:         testKey.AccountID,
-		UserID:            testKey.UserID,
 		ProviderID:        testKey.ProviderID,
+		LinkedBy:          testAdmin,
 		RefreshToken:      "rt-0",
 		AccessToken:       "old-access",
 		AccessExpiresAt:   accessExpiry,
 		ExternalAccountID: "acct-42",
-		Status:            types.UserCredentialActive,
+		Status:            types.CredentialActive,
 	}))
 }
 
@@ -199,54 +201,58 @@ func TestDeviceFlow_LinksAfterApproval(t *testing.T) {
 	clock := time.Now().UTC()
 	svc.now = func() time.Time { return clock }
 
-	flow, err := svc.StartLink(ctx, testKey, issuer.entry())
+	flow, err := svc.StartLink(ctx, testKey, testAdmin, issuer.entry())
 	require.NoError(t, err)
 	assert.Equal(t, "ABCD-1234", flow.UserCode, "the vendor's usercode field should be accepted")
 	assert.Equal(t, time.Second, flow.Interval, "a string interval should be parsed")
 	assert.Equal(t, issuer.srv.URL+"/codex/device", flow.VerificationURI)
 
 	// Polled before the interval elapsed: no vendor call, still pending.
-	got, err := svc.PollLink(ctx, testKey, flow.ID, issuer.entry())
+	got, err := svc.PollLink(ctx, testKey, testAdmin, flow.ID, issuer.entry())
 	require.NoError(t, err)
 	assert.Equal(t, FlowPending, got.Status)
 
 	clock = clock.Add(2 * time.Second)
-	got, err = svc.PollLink(ctx, testKey, flow.ID, issuer.entry())
+	got, err = svc.PollLink(ctx, testKey, testAdmin, flow.ID, issuer.entry())
 	require.NoError(t, err)
 	assert.Equal(t, FlowPending, got.Status, "a 403 from the vendor means the user has not approved yet")
 
 	clock = clock.Add(2 * time.Second)
-	got, err = svc.PollLink(ctx, testKey, flow.ID, issuer.entry())
+	got, err = svc.PollLink(ctx, testKey, testAdmin, flow.ID, issuer.entry())
 	require.NoError(t, err)
 	assert.Equal(t, FlowLinked, got.Status)
 
-	cred, err := s.GetAgentNetworkUserCredential(ctx, testKey.AccountID, testKey.UserID, testKey.ProviderID)
+	cred, err := s.GetAgentNetworkProviderCredential(ctx, testKey.AccountID, testKey.ProviderID)
 	require.NoError(t, err)
 	assert.Equal(t, "rt-1", cred.RefreshToken, "the issued refresh token should be stored")
 	assert.Equal(t, "acct-42", cred.ExternalAccountID)
 	assert.Equal(t, "pro", cred.PlanType)
-	assert.Equal(t, types.UserCredentialActive, cred.Status)
+	assert.Equal(t, testAdmin, cred.LinkedBy, "the login should record who linked it")
+	assert.Equal(t, types.CredentialActive, cred.Status)
 
 	// A late poll reads the recorded outcome instead of redeeming again.
-	got, err = svc.PollLink(ctx, testKey, flow.ID, issuer.entry())
+	got, err = svc.PollLink(ctx, testKey, testAdmin, flow.ID, issuer.entry())
 	require.NoError(t, err)
 	assert.Equal(t, FlowLinked, got.Status)
 }
 
-func TestDeviceFlow_BoundToCaller(t *testing.T) {
+func TestDeviceFlow_BoundToStarter(t *testing.T) {
 	ctx := context.Background()
 	issuer := newFakeIssuer(t)
 	svc := NewService(newTestStore(t, true), newTestCache(t), nil)
 
-	flow, err := svc.StartLink(ctx, testKey, issuer.entry())
+	flow, err := svc.StartLink(ctx, testKey, testAdmin, issuer.entry())
 	require.NoError(t, err)
 
-	other := testKey
-	other.UserID = "user-2"
-	_, err = svc.PollLink(ctx, other, flow.ID, issuer.entry())
-	assert.ErrorIs(t, err, ErrFlowNotFound, "another user must not be able to complete someone else's flow")
+	_, err = svc.PollLink(ctx, testKey, "admin-2", flow.ID, issuer.entry())
+	assert.ErrorIs(t, err, ErrFlowNotFound, "only the user who started a flow may complete it")
 
-	_, err = svc.PollLink(ctx, testKey, "unknown", issuer.entry())
+	other := testKey
+	other.ProviderID = "prov-2"
+	_, err = svc.PollLink(ctx, other, testAdmin, flow.ID, issuer.entry())
+	assert.ErrorIs(t, err, ErrFlowNotFound, "a flow must not complete another provider's login")
+
+	_, err = svc.PollLink(ctx, testKey, testAdmin, "unknown", issuer.entry())
 	assert.ErrorIs(t, err, ErrFlowNotFound)
 }
 
@@ -257,7 +263,7 @@ func TestDeviceFlow_DisabledByVendor(t *testing.T) {
 	entry.OAuth.DeviceCodeURL = srv.URL + "/usercode"
 
 	svc := NewService(newTestStore(t, true), newTestCache(t), nil)
-	_, err := svc.StartLink(context.Background(), testKey, entry)
+	_, err := svc.StartLink(context.Background(), testKey, testAdmin, entry)
 	assert.ErrorIs(t, err, ErrDeviceLoginDisabled)
 }
 
@@ -291,7 +297,7 @@ func TestAccess_RefreshesNearExpiry(t *testing.T) {
 	assert.Contains(t, access.Headers, Header{Name: "X-OpenAI-Fedramp", Value: "true"}, "a FedRAMP account should carry the FedRAMP header")
 	assert.WithinDuration(t, time.Now().Add(time.Hour), access.ExpiresAt, time.Minute, "expiry should come from the access token")
 
-	cred, err := s.GetAgentNetworkUserCredential(ctx, testKey.AccountID, testKey.UserID, testKey.ProviderID)
+	cred, err := s.GetAgentNetworkProviderCredential(ctx, testKey.AccountID, testKey.ProviderID)
 	require.NoError(t, err)
 	assert.Equal(t, "rt-1", cred.RefreshToken, "the rotated refresh token must be stored")
 	assert.Nil(t, cred.RefreshLeaseUntil, "the refresh lease should be released")
@@ -341,10 +347,10 @@ func TestAccess_PermanentFailureNeedsRelink(t *testing.T) {
 	_, err := svc.Access(ctx, testKey, issuer.entry())
 	assert.ErrorIs(t, err, ErrRelinkRequired)
 
-	statuses, err := s.GetAccountAgentNetworkUserCredentialStatuses(ctx, testKey.AccountID)
+	statuses, err := s.GetAccountAgentNetworkProviderCredentialStatuses(ctx, testKey.AccountID)
 	require.NoError(t, err)
 	require.Len(t, statuses, 1)
-	assert.Equal(t, types.UserCredentialNeedsRelink, statuses[0].Status)
+	assert.Equal(t, types.CredentialNeedsRelink, statuses[0].Status)
 
 	_, err = svc.Access(ctx, testKey, issuer.entry())
 	assert.ErrorIs(t, err, ErrRelinkRequired)
@@ -365,9 +371,9 @@ func TestAccess_TransientFailureKeepsUsableToken(t *testing.T) {
 	require.NoError(t, err, "a token that has not expired yet should still be served")
 	assert.Equal(t, "Bearer old-access", access.Headers[0].Value)
 
-	cred, err := s.GetAgentNetworkUserCredential(context.Background(), testKey.AccountID, testKey.UserID, testKey.ProviderID)
+	cred, err := s.GetAgentNetworkProviderCredential(context.Background(), testKey.AccountID, testKey.ProviderID)
 	require.NoError(t, err)
-	assert.Equal(t, types.UserCredentialActive, cred.Status, "a transient failure must not mark the login dead")
+	assert.Equal(t, types.CredentialActive, cred.Status, "a transient failure must not mark the login dead")
 	assert.Nil(t, cred.RefreshLeaseUntil, "the lease should be released for the next attempt")
 }
 
@@ -380,8 +386,8 @@ func TestAccess_NotLinked(t *testing.T) {
 
 func TestStore_RefusesTokensWithoutEncryption(t *testing.T) {
 	s := newTestStore(t, false)
-	err := s.LinkAgentNetworkUserCredential(context.Background(), &types.UserCredential{
-		AccountID: "a", UserID: "u", ProviderID: "p", RefreshToken: "rt", Status: types.UserCredentialActive,
+	err := s.LinkAgentNetworkProviderCredential(context.Background(), &types.ProviderCredential{
+		AccountID: "a", ProviderID: "p", RefreshToken: "rt", Status: types.CredentialActive,
 	})
 	assert.Error(t, err, "tokens must never be written in plaintext")
 }

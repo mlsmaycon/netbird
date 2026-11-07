@@ -77,12 +77,14 @@ func testJWT(claims map[string]any) string {
 	return "e30." + base64.RawURLEncoding.EncodeToString(raw) + ".sig"
 }
 
-// TestReverseProxy_AgentNetworkSubscription_FullChain drives a Codex request
-// through the real proxy chain against a real management stack. The user's
-// stored login is expired, so management must refresh it against the (fake)
-// OpenAI token endpoint before the proxy can send the request on with the
-// user's own token and account header, while the client's own credentials
-// are stripped and the usage is recorded without API pricing.
+// TestReverseProxy_AgentNetworkSubscription_FullChain drives Codex requests
+// through the real proxy chain against a real management stack. Until a
+// ChatGPT login is linked to the provider, requests are refused. Once the
+// admin has linked one (stored expired here), management refreshes it against
+// the (fake) OpenAI token endpoint and the proxy sends every request the
+// policy allows on with that login's token and account header, from a user's
+// machine and from a machine that belongs to nobody alike. The client's own
+// credentials are stripped and usage is recorded without API pricing.
 func TestReverseProxy_AgentNetworkSubscription_FullChain(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("sqlite store not supported on Windows")
@@ -91,6 +93,7 @@ func TestReverseProxy_AgentNetworkSubscription_FullChain(t *testing.T) {
 	const (
 		accountID  = "acct-sub-1"
 		userID     = "user-sub-1"
+		adminID    = "admin-sub-1"
 		groupID    = "grp-codex"
 		providerID = "prov-chatgpt"
 		domain     = "sub.test.proxy.local"
@@ -149,12 +152,6 @@ func TestReverseProxy_AgentNetworkSubscription_FullChain(t *testing.T) {
 		ID: "pol-codex", AccountID: accountID, Name: "codex", Enabled: true,
 		SourceGroups: []string{groupID}, DestinationProviderIDs: []string{providerID},
 	}))
-	require.NoError(t, st.LinkAgentNetworkUserCredential(ctx, &agentNetworkTypes.UserCredential{
-		AccountID: accountID, UserID: userID, ProviderID: providerID,
-		RefreshToken: "rt-0", AccessToken: "expired-access", AccessExpiresAt: time.Now().Add(-time.Minute),
-		ExternalAccountID: "acct-42", FedRAMP: true, Status: agentNetworkTypes.UserCredentialActive,
-	}))
-
 	anMgr := agentnetwork.NewManager(st, nil, nil, nil, agentnetwork.WithCatalogLookup(lookup))
 	server := &mgmtgrpc.ProxyServiceServer{}
 	server.SetAgentNetworkLimitsService(anMgr)
@@ -212,7 +209,9 @@ func TestReverseProxy_AgentNetworkSubscription_FullChain(t *testing.T) {
 		cd := proxy.NewCapturedData("req-" + user)
 		cd.SetServiceID(nbproxytypes.ServiceID(synthSvc.ID))
 		cd.SetAccountID(nbproxytypes.AccountID(accountID))
-		cd.SetUserID(user)
+		if user != "" {
+			cd.SetUserID(user)
+		}
 		cd.SetUserGroups([]string{groupID})
 		cd.SetAuthMethod("tunnel_peer")
 		req = req.WithContext(proxy.WithCapturedData(req.Context(), cd))
@@ -221,6 +220,21 @@ func TestReverseProxy_AgentNetworkSubscription_FullChain(t *testing.T) {
 		return w, cd
 	}
 
+	// Nothing linked yet: refused before reaching the vendor.
+	w, _ := send(userID)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Body.String(), "llm_policy.credential_not_linked")
+	upstream.mu.Lock()
+	assert.Empty(t, upstream.reqs, "a refused request must not reach the vendor")
+	upstream.mu.Unlock()
+
+	// The admin links the provider's login.
+	require.NoError(t, st.LinkAgentNetworkProviderCredential(ctx, &agentNetworkTypes.ProviderCredential{
+		AccountID: accountID, ProviderID: providerID, LinkedBy: adminID,
+		RefreshToken: "rt-0", AccessToken: "expired-access", AccessExpiresAt: time.Now().Add(-time.Minute),
+		ExternalAccountID: "acct-42", FedRAMP: true, Status: agentNetworkTypes.CredentialActive,
+	}))
+
 	w, cd := send(userID)
 	require.Equal(t, http.StatusOK, w.Code, "the request should be served; body=%s", w.Body.String())
 	assert.Equal(t, int32(1), refreshes.Load(), "management should have refreshed the expired login once")
@@ -228,8 +242,8 @@ func TestReverseProxy_AgentNetworkSubscription_FullChain(t *testing.T) {
 	out := upstream.last(t)
 	assert.Equal(t, "chatgpt.com", out.URL.Host, "subscription traffic must only go to the vendor")
 	assert.Equal(t, "/backend-api/codex/responses", out.URL.Path)
-	assert.Equal(t, "Bearer "+freshAccess, out.Header.Get("Authorization"), "the user's refreshed token should replace the client's")
-	assert.Equal(t, []string{"acct-42"}, out.Header.Values("Chatgpt-Account-Id"), "the account header must be the user's own")
+	assert.Equal(t, "Bearer "+freshAccess, out.Header.Get("Authorization"), "the linked login's refreshed token should replace the client's")
+	assert.Equal(t, []string{"acct-42"}, out.Header.Values("Chatgpt-Account-Id"), "the account header must be the linked login's")
 	assert.Equal(t, "true", out.Header.Get("X-OpenAI-Fedramp"))
 
 	md := cd.GetMetadata()
@@ -240,28 +254,18 @@ func TestReverseProxy_AgentNetworkSubscription_FullChain(t *testing.T) {
 	assert.Equal(t, "subscription", md["cost.skipped"], "subscription usage must not be priced at API rates")
 	assert.Empty(t, md["cost.usd_total"])
 
-	cred, err := st.GetAgentNetworkUserCredential(ctx, accountID, userID, providerID)
+	cred, err := st.GetAgentNetworkProviderCredential(ctx, accountID, providerID)
 	require.NoError(t, err)
 	assert.Equal(t, "rt-1", cred.RefreshToken, "the rotated refresh token must be kept")
 
-	// A second request reuses the proxy's cached answer: no second refresh,
-	// which the fake issuer would refuse as a reused token anyway.
-	w, _ = send(userID)
+	// A machine added with a setup key belongs to no user; the shared login
+	// serves it too, from the proxy's cache: no second refresh, which the
+	// fake issuer would refuse as a reused token anyway.
+	w, cd = send("")
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Equal(t, "Bearer "+freshAccess, upstream.last(t).Header.Get("Authorization"))
 	assert.Equal(t, int32(1), refreshes.Load())
-
-	// A group member who never linked is refused, not served on someone
-	// else's login.
-	require.NoError(t, st.SaveUser(ctx, &nbtypes.User{Id: "user-unlinked", AccountID: accountID, Role: nbtypes.UserRoleUser, AutoGroups: []string{groupID}}))
-	upstream.mu.Lock()
-	calls := len(upstream.reqs)
-	upstream.mu.Unlock()
-	w, _ = send("user-unlinked")
-	assert.Equal(t, http.StatusForbidden, w.Code)
-	assert.Contains(t, w.Body.String(), "llm_policy.credential_not_linked")
-	upstream.mu.Lock()
-	assert.Equal(t, calls, len(upstream.reqs), "a refused request must not reach the vendor")
-	upstream.mu.Unlock()
+	assert.Equal(t, "subscription", cd.GetMetadata()["llm.billing_mode"])
 }
 
 func subscriptionChainSpecs(t *testing.T, svc *rpservice.Service) []middleware.Spec {

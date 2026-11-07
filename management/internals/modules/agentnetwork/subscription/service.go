@@ -43,7 +43,7 @@ const (
 )
 
 var (
-	// ErrNotLinked means the user has no login for the provider record.
+	// ErrNotLinked means no login is linked to the provider record.
 	ErrNotLinked = errors.New("subscription login is not linked")
 	// ErrFlowNotFound means the link flow does not exist, expired from the
 	// cache, or belongs to someone else.
@@ -57,16 +57,15 @@ var (
 
 // CredentialStore is the slice of the management store the service uses.
 type CredentialStore interface {
-	GetAgentNetworkUserCredential(ctx context.Context, accountID, userID, providerID string) (*types.UserCredential, error)
-	LinkAgentNetworkUserCredential(ctx context.Context, cred *types.UserCredential) error
-	CompareAndSwapAgentNetworkUserCredential(ctx context.Context, cred *types.UserCredential, expectedVersion int64) (bool, error)
-	DeleteAgentNetworkUserCredential(ctx context.Context, accountID, userID, providerID string) error
+	GetAgentNetworkProviderCredential(ctx context.Context, accountID, providerID string) (*types.ProviderCredential, error)
+	LinkAgentNetworkProviderCredential(ctx context.Context, cred *types.ProviderCredential) error
+	CompareAndSwapAgentNetworkProviderCredential(ctx context.Context, cred *types.ProviderCredential, expectedVersion int64) (bool, error)
+	DeleteAgentNetworkProviderCredential(ctx context.Context, accountID, providerID string) error
 }
 
-// Key identifies one user's login for one provider record.
+// Key identifies the login linked to one provider record.
 type Key struct {
 	AccountID  string
-	UserID     string
 	ProviderID string
 }
 
@@ -124,7 +123,10 @@ func NewService(credStore CredentialStore, cache nbcache.Store, client *Client) 
 }
 
 type flowState struct {
-	Key          Key       `json:"key"`
+	Key Key `json:"key"`
+	// StartedBy is the user who started the flow. Only they may poll it, and
+	// the login it stores is recorded as linked by them.
+	StartedBy    string    `json:"started_by"`
 	DeviceAuthID string    `json:"device_auth_id"`
 	UserCode     string    `json:"user_code"`
 	IntervalMS   int64     `json:"interval_ms"`
@@ -144,10 +146,10 @@ func (f *flowState) view(id string, st FlowStatus) *Flow {
 	}
 }
 
-// StartLink begins a login for key and returns the code the user must enter.
-// The device handle stays in the shared cache, bound to key, so any replica
-// can serve the polls.
-func (s *Service) StartLink(ctx context.Context, key Key, entry catalog.Provider) (*Flow, error) {
+// StartLink begins a login for key on behalf of startedBy and returns the code
+// to enter. The device handle stays in the shared cache, bound to key and the
+// user, so any replica can serve the polls.
+func (s *Service) StartLink(ctx context.Context, key Key, startedBy string, entry catalog.Provider) (*Flow, error) {
 	prof := entry.OAuth
 	if prof == nil || prof.Flow != catalog.OAuthFlowDevice {
 		return nil, ErrUnsupportedFlow
@@ -170,6 +172,7 @@ func (s *Service) StartLink(ctx context.Context, key Key, entry catalog.Provider
 	now := s.now()
 	state := &flowState{
 		Key:          key,
+		StartedBy:    startedBy,
 		DeviceAuthID: code.DeviceAuthID,
 		UserCode:     code.UserCode,
 		IntervalMS:   code.Interval.Milliseconds(),
@@ -186,7 +189,7 @@ func (s *Service) StartLink(ctx context.Context, key Key, entry catalog.Provider
 // PollLink advances a login started by StartLink. It contacts the vendor at
 // most once per poll interval no matter how often it is called, and stores
 // the tokens when the user has approved.
-func (s *Service) PollLink(ctx context.Context, key Key, flowID string, entry catalog.Provider) (*Flow, error) {
+func (s *Service) PollLink(ctx context.Context, key Key, userID, flowID string, entry catalog.Provider) (*Flow, error) {
 	if entry.OAuth == nil {
 		return nil, ErrUnsupportedFlow
 	}
@@ -197,7 +200,7 @@ func (s *Service) PollLink(ctx context.Context, key Key, flowID string, entry ca
 	if err != nil {
 		return nil, err
 	}
-	if state.Key != key {
+	if state.Key != key || state.StartedBy != userID {
 		return nil, ErrFlowNotFound
 	}
 	if result, ok := s.flowResult(ctx, flowID); ok {
@@ -243,7 +246,7 @@ func (s *Service) pollVendor(ctx context.Context, flowID string, state *flowStat
 		s.setFlowResult(ctx, flowID, FlowFailed)
 		return FlowFailed
 	}
-	if err := s.storeLinked(ctx, state.Key, entry.OAuth, tokens); err != nil {
+	if err := s.storeLinked(ctx, state.Key, state.StartedBy, entry.OAuth, tokens); err != nil {
 		log.WithContext(ctx).Infof("agent network subscription link for provider %s could not be stored: %v", state.Key.ProviderID, err)
 		s.setFlowResult(ctx, flowID, FlowFailed)
 		return FlowFailed
@@ -252,38 +255,39 @@ func (s *Service) pollVendor(ctx context.Context, flowID string, state *flowStat
 	return FlowLinked
 }
 
-func (s *Service) storeLinked(ctx context.Context, key Key, prof *catalog.OAuthProfile, tokens *TokenSet) error {
+func (s *Service) storeLinked(ctx context.Context, key Key, linkedBy string, prof *catalog.OAuthProfile, tokens *TokenSet) error {
 	claims, err := ParseAccountClaims(prof, tokens.IDToken)
 	if err != nil {
 		return err
 	}
 	now := s.now()
-	cred := &types.UserCredential{
+	cred := &types.ProviderCredential{
 		AccountID:         key.AccountID,
-		UserID:            key.UserID,
 		ProviderID:        key.ProviderID,
+		LinkedBy:          linkedBy,
 		RefreshToken:      tokens.RefreshToken,
 		AccessToken:       tokens.AccessToken,
 		AccessExpiresAt:   accessExpiry(tokens.AccessToken, now),
 		ExternalAccountID: claims.AccountID,
 		PlanType:          claims.PlanType,
 		FedRAMP:           claims.FedRAMP,
-		Status:            types.UserCredentialActive,
+		Status:            types.CredentialActive,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 		LastRefreshedAt:   &now,
 	}
-	return s.store.LinkAgentNetworkUserCredential(ctx, cred)
+	return s.store.LinkAgentNetworkProviderCredential(ctx, cred)
 }
 
-// Unlink forgets the user's login for the provider record.
+// Unlink forgets the login linked to the provider record.
 func (s *Service) Unlink(ctx context.Context, key Key) error {
-	return s.store.DeleteAgentNetworkUserCredential(ctx, key.AccountID, key.UserID, key.ProviderID)
+	return s.store.DeleteAgentNetworkProviderCredential(ctx, key.AccountID, key.ProviderID)
 }
 
-// Access returns the headers that let the proxy call the vendor as the user,
-// refreshing the access token first when it is close to expiry. It returns
-// ErrNotLinked or ErrRelinkRequired when there is nothing usable to serve.
+// Access returns the headers that let the proxy call the vendor with the
+// provider's linked login, refreshing the access token first when it is close
+// to expiry. It returns ErrNotLinked or ErrRelinkRequired when there is
+// nothing usable to serve.
 func (s *Service) Access(ctx context.Context, key Key, entry catalog.Provider) (*Access, error) {
 	if entry.OAuth == nil {
 		return nil, ErrUnsupportedFlow
@@ -303,15 +307,15 @@ func (s *Service) Access(ctx context.Context, key Key, entry catalog.Provider) (
 	return &Access{Headers: accessHeaders(entry, cred), ExpiresAt: cred.AccessExpiresAt}, nil
 }
 
-func (s *Service) load(ctx context.Context, key Key) (*types.UserCredential, error) {
-	cred, err := s.store.GetAgentNetworkUserCredential(ctx, key.AccountID, key.UserID, key.ProviderID)
+func (s *Service) load(ctx context.Context, key Key) (*types.ProviderCredential, error) {
+	cred, err := s.store.GetAgentNetworkProviderCredential(ctx, key.AccountID, key.ProviderID)
 	if err != nil {
 		if e, ok := status.FromError(err); ok && e.Type() == status.NotFound {
 			return nil, ErrNotLinked
 		}
 		return nil, err
 	}
-	if cred.Status != types.UserCredentialActive {
+	if cred.Status != types.CredentialActive {
 		return nil, ErrRelinkRequired
 	}
 	return cred, nil
@@ -321,7 +325,7 @@ func (s *Service) load(ctx context.Context, key Key) (*types.UserCredential, err
 // compare-and-swap claims the refresh lease presents the refresh token; the
 // vendor kills a login whose refresh token is presented twice, so everyone
 // else waits for that replica's result instead.
-func (s *Service) refresh(ctx context.Context, key Key, prof *catalog.OAuthProfile) (*types.UserCredential, error) {
+func (s *Service) refresh(ctx context.Context, key Key, prof *catalog.OAuthProfile) (*types.ProviderCredential, error) {
 	deadline := s.now().Add(refreshLease + time.Second)
 	for {
 		cred, err := s.load(ctx, key)
@@ -347,7 +351,7 @@ func (s *Service) refresh(ctx context.Context, key Key, prof *catalog.OAuthProfi
 		claimed := cred.Copy()
 		lease := now.Add(refreshLease)
 		claimed.RefreshLeaseUntil = &lease
-		ok, err := s.store.CompareAndSwapAgentNetworkUserCredential(ctx, claimed, cred.Version)
+		ok, err := s.store.CompareAndSwapAgentNetworkProviderCredential(ctx, claimed, cred.Version)
 		if err != nil {
 			return nil, err
 		}
@@ -360,7 +364,7 @@ func (s *Service) refresh(ctx context.Context, key Key, prof *catalog.OAuthProfi
 
 // redeem presents the refresh token of a credential this replica holds the
 // lease on, and records the outcome.
-func (s *Service) redeem(ctx context.Context, key Key, prof *catalog.OAuthProfile, cred *types.UserCredential) (*types.UserCredential, error) {
+func (s *Service) redeem(ctx context.Context, key Key, prof *catalog.OAuthProfile, cred *types.ProviderCredential) (*types.ProviderCredential, error) {
 	held := cred.Version
 	tokens, err := s.client.Refresh(ctx, prof, cred.RefreshToken)
 	next := cred.Copy()
@@ -368,15 +372,15 @@ func (s *Service) redeem(ctx context.Context, key Key, prof *catalog.OAuthProfil
 	switch {
 	case errors.Is(err, ErrRelinkRequired):
 		log.WithContext(ctx).Infof("agent network subscription login for provider %s needs relinking: %v", key.ProviderID, err)
-		next.Status = types.UserCredentialNeedsRelink
+		next.Status = types.CredentialNeedsRelink
 		next.AccessToken = ""
 		next.RefreshToken = ""
-		if _, werr := s.store.CompareAndSwapAgentNetworkUserCredential(ctx, next, held); werr != nil {
+		if _, werr := s.store.CompareAndSwapAgentNetworkProviderCredential(ctx, next, held); werr != nil {
 			return nil, werr
 		}
 		return nil, ErrRelinkRequired
 	case err != nil:
-		if _, werr := s.store.CompareAndSwapAgentNetworkUserCredential(ctx, next, held); werr != nil {
+		if _, werr := s.store.CompareAndSwapAgentNetworkProviderCredential(ctx, next, held); werr != nil {
 			log.WithContext(ctx).Debugf("failed to release subscription refresh lease: %v", werr)
 		}
 		if cred.AccessValidFor(s.now(), 0) {
@@ -391,10 +395,10 @@ func (s *Service) redeem(ctx context.Context, key Key, prof *catalog.OAuthProfil
 
 // persistRefresh stores a redeemed token set. The old refresh token is
 // already spent, so a failed write is retried rather than given up on.
-func (s *Service) persistRefresh(ctx context.Context, key Key, next *types.UserCredential, held int64) (*types.UserCredential, error) {
+func (s *Service) persistRefresh(ctx context.Context, key Key, next *types.ProviderCredential, held int64) (*types.ProviderCredential, error) {
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		ok, err := s.store.CompareAndSwapAgentNetworkUserCredential(ctx, next, held)
+		ok, err := s.store.CompareAndSwapAgentNetworkProviderCredential(ctx, next, held)
 		if err == nil && ok {
 			return next, nil
 		}
@@ -412,7 +416,7 @@ func (s *Service) persistRefresh(ctx context.Context, key Key, next *types.UserC
 	return nil, fmt.Errorf("store refreshed subscription login: %w", lastErr)
 }
 
-func applyRefresh(cred *types.UserCredential, prof *catalog.OAuthProfile, tokens *TokenSet, now time.Time) {
+func applyRefresh(cred *types.ProviderCredential, prof *catalog.OAuthProfile, tokens *TokenSet, now time.Time) {
 	if tokens.AccessToken != "" {
 		cred.AccessToken = tokens.AccessToken
 		cred.AccessExpiresAt = accessExpiry(tokens.AccessToken, now)
@@ -437,7 +441,7 @@ func accessExpiry(accessToken string, now time.Time) time.Time {
 	return now.Add(unreadableExpiryTTL)
 }
 
-func accessHeaders(entry catalog.Provider, cred *types.UserCredential) []Header {
+func accessHeaders(entry catalog.Provider, cred *types.ProviderCredential) []Header {
 	prof := entry.OAuth
 	headers := []Header{{
 		Name:  entry.AuthHeaderName,

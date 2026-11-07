@@ -94,6 +94,10 @@ type Provider struct {
 	IdentityHeaderGroups string `gorm:"column:identity_header_groups"`
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
+	// SubscriptionLink is the state of the linked subscription login of a
+	// user_oauth provider, filled by the manager for API responses. It is
+	// never persisted on this row.
+	SubscriptionLink *SubscriptionLinkState `gorm:"-"`
 }
 
 // TableName uses an explicit name so the Agent Network provider rows live
@@ -225,6 +229,9 @@ func (p *Provider) ToAPIResponse() *api.AgentNetworkProvider {
 		CreatedAt:            &created,
 		UpdatedAt:            &updated,
 	}
+	if p.SubscriptionLink != nil {
+		resp.SubscriptionLink = p.SubscriptionLink.ToAPIResponse()
+	}
 	if len(p.ExtraValues) > 0 {
 		out := make(map[string]string, len(p.ExtraValues))
 		for k, v := range p.ExtraValues {
@@ -256,6 +263,10 @@ func (p *Provider) Copy() *Provider {
 			m.CacheCreationPer1k = copyFloatPtr(m.CacheCreationPer1k)
 			clone.Models[i] = m
 		}
+	}
+	if p.SubscriptionLink != nil {
+		link := *p.SubscriptionLink
+		clone.SubscriptionLink = &link
 	}
 	if p.ExtraValues != nil {
 		clone.ExtraValues = make(map[string]string, len(p.ExtraValues))

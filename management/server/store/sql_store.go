@@ -89,7 +89,7 @@ func NewSqlStore(ctx context.Context, conn *db.Conn, metrics telemetry.AppMetric
 		&agentNetworkTypes.Consumption{}, &agentNetworkTypes.AccountBudgetRule{},
 		&agentNetworkTypes.AgentNetworkAccessLog{}, &agentNetworkTypes.AgentNetworkAccessLogGroup{},
 		&agentNetworkTypes.AgentNetworkUsage{}, &agentNetworkTypes.AgentNetworkUsageGroup{},
-		&agentNetworkTypes.UserCredential{},
+		&agentNetworkTypes.ProviderCredential{},
 	)
 	if err != nil {
 		return nil, fmt.Errorf("auto migratePreAuto: %w", err)
