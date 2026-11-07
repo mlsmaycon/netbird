@@ -187,6 +187,21 @@ func (mr *MockStoreMockRecorder) Close(ctx any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockStore)(nil).Close), ctx)
 }
 
+// CompareAndSwapAgentNetworkUserCredential mocks base method.
+func (m *MockStore) CompareAndSwapAgentNetworkUserCredential(ctx context.Context, cred *types.UserCredential, expectedVersion int64) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CompareAndSwapAgentNetworkUserCredential", ctx, cred, expectedVersion)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CompareAndSwapAgentNetworkUserCredential indicates an expected call of CompareAndSwapAgentNetworkUserCredential.
+func (mr *MockStoreMockRecorder) CompareAndSwapAgentNetworkUserCredential(ctx, cred, expectedVersion any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CompareAndSwapAgentNetworkUserCredential", reflect.TypeOf((*MockStore)(nil).CompareAndSwapAgentNetworkUserCredential), ctx, cred, expectedVersion)
+}
+
 // CompletePeerJob mocks base method.
 func (m *MockStore) CompletePeerJob(ctx context.Context, job *types3.Job) error {
 	m.ctrl.T.Helper()
@@ -541,6 +556,34 @@ func (m *MockStore) DeleteAgentNetworkSettings(ctx context.Context, accountID st
 func (mr *MockStoreMockRecorder) DeleteAgentNetworkSettings(ctx, accountID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteAgentNetworkSettings", reflect.TypeOf((*MockStore)(nil).DeleteAgentNetworkSettings), ctx, accountID)
+}
+
+// DeleteAgentNetworkUserCredential mocks base method.
+func (m *MockStore) DeleteAgentNetworkUserCredential(ctx context.Context, accountID, userID, providerID string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteAgentNetworkUserCredential", ctx, accountID, userID, providerID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// DeleteAgentNetworkUserCredential indicates an expected call of DeleteAgentNetworkUserCredential.
+func (mr *MockStoreMockRecorder) DeleteAgentNetworkUserCredential(ctx, accountID, userID, providerID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteAgentNetworkUserCredential", reflect.TypeOf((*MockStore)(nil).DeleteAgentNetworkUserCredential), ctx, accountID, userID, providerID)
+}
+
+// DeleteAgentNetworkUserCredentialsForProvider mocks base method.
+func (m *MockStore) DeleteAgentNetworkUserCredentialsForProvider(ctx context.Context, accountID, providerID string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteAgentNetworkUserCredentialsForProvider", ctx, accountID, providerID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// DeleteAgentNetworkUserCredentialsForProvider indicates an expected call of DeleteAgentNetworkUserCredentialsForProvider.
+func (mr *MockStoreMockRecorder) DeleteAgentNetworkUserCredentialsForProvider(ctx, accountID, providerID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteAgentNetworkUserCredentialsForProvider", reflect.TypeOf((*MockStore)(nil).DeleteAgentNetworkUserCredentialsForProvider), ctx, accountID, providerID)
 }
 
 // DeleteCustomDomain mocks base method.
@@ -1056,6 +1099,21 @@ func (m *MockStore) GetAccountAgentNetworkProviders(ctx context.Context, lockStr
 func (mr *MockStoreMockRecorder) GetAccountAgentNetworkProviders(ctx, lockStrength, accountID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAccountAgentNetworkProviders", reflect.TypeOf((*MockStore)(nil).GetAccountAgentNetworkProviders), ctx, lockStrength, accountID)
+}
+
+// GetAccountAgentNetworkUserCredentialStatuses mocks base method.
+func (m *MockStore) GetAccountAgentNetworkUserCredentialStatuses(ctx context.Context, accountID string) ([]*types.UserCredential, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetAccountAgentNetworkUserCredentialStatuses", ctx, accountID)
+	ret0, _ := ret[0].([]*types.UserCredential)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetAccountAgentNetworkUserCredentialStatuses indicates an expected call of GetAccountAgentNetworkUserCredentialStatuses.
+func (mr *MockStoreMockRecorder) GetAccountAgentNetworkUserCredentialStatuses(ctx, accountID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAccountAgentNetworkUserCredentialStatuses", reflect.TypeOf((*MockStore)(nil).GetAccountAgentNetworkUserCredentialStatuses), ctx, accountID)
 }
 
 // GetAccountByPeerID mocks base method.
@@ -1825,6 +1883,21 @@ func (m *MockStore) GetAgentNetworkUsageRows(ctx context.Context, lockStrength L
 func (mr *MockStoreMockRecorder) GetAgentNetworkUsageRows(ctx, lockStrength, accountID, filter any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAgentNetworkUsageRows", reflect.TypeOf((*MockStore)(nil).GetAgentNetworkUsageRows), ctx, lockStrength, accountID, filter)
+}
+
+// GetAgentNetworkUserCredential mocks base method.
+func (m *MockStore) GetAgentNetworkUserCredential(ctx context.Context, accountID, userID, providerID string) (*types.UserCredential, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetAgentNetworkUserCredential", ctx, accountID, userID, providerID)
+	ret0, _ := ret[0].(*types.UserCredential)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetAgentNetworkUserCredential indicates an expected call of GetAgentNetworkUserCredential.
+func (mr *MockStoreMockRecorder) GetAgentNetworkUserCredential(ctx, accountID, userID, providerID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAgentNetworkUserCredential", reflect.TypeOf((*MockStore)(nil).GetAgentNetworkUserCredential), ctx, accountID, userID, providerID)
 }
 
 // GetAllAccounts mocks base method.
@@ -3345,6 +3418,20 @@ func (m *MockStore) IsProxyAccessTokenValid(ctx context.Context, tokenID string)
 func (mr *MockStoreMockRecorder) IsProxyAccessTokenValid(ctx, tokenID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsProxyAccessTokenValid", reflect.TypeOf((*MockStore)(nil).IsProxyAccessTokenValid), ctx, tokenID)
+}
+
+// LinkAgentNetworkUserCredential mocks base method.
+func (m *MockStore) LinkAgentNetworkUserCredential(ctx context.Context, cred *types.UserCredential) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "LinkAgentNetworkUserCredential", ctx, cred)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// LinkAgentNetworkUserCredential indicates an expected call of LinkAgentNetworkUserCredential.
+func (mr *MockStoreMockRecorder) LinkAgentNetworkUserCredential(ctx, cred any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LinkAgentNetworkUserCredential", reflect.TypeOf((*MockStore)(nil).LinkAgentNetworkUserCredential), ctx, cred)
 }
 
 // ListAgentNetworkConsumption mocks base method.

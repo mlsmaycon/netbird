@@ -11,13 +11,16 @@ import (
 
 	log "github.com/sirupsen/logrus"
 
+	"github.com/netbirdio/netbird/management/internals/modules/agentnetwork/catalog"
 	"github.com/netbirdio/netbird/management/internals/modules/agentnetwork/labelgen"
 	"github.com/netbirdio/netbird/management/internals/modules/agentnetwork/modeldiscovery"
+	"github.com/netbirdio/netbird/management/internals/modules/agentnetwork/subscription"
 	"github.com/netbirdio/netbird/management/internals/modules/agentnetwork/types"
 	"github.com/netbirdio/netbird/management/internals/modules/reverseproxy/proxy"
 	"github.com/netbirdio/netbird/management/internals/modules/reverseproxy/sessionkey"
 	"github.com/netbirdio/netbird/management/server/account"
 	"github.com/netbirdio/netbird/management/server/activity"
+	nbcache "github.com/netbirdio/netbird/management/server/cache"
 	"github.com/netbirdio/netbird/management/server/permissions"
 	"github.com/netbirdio/netbird/management/server/permissions/modules"
 	"github.com/netbirdio/netbird/management/server/permissions/operations"
@@ -94,6 +97,11 @@ type Manager interface {
 	// through GetUsageOverview / ListAccessLogs, which self-scope when
 	// the account-wide grant is missing.
 	GetAgentConfigForUser(ctx context.Context, accountID, userID string) (*types.AgentConfig, error)
+
+	// GetUserCredentialAccess returns the upstream headers for one user's
+	// linked subscription login, refreshing it when needed. It backs the
+	// proxy's GetLLMUserCredential RPC.
+	GetUserCredentialAccess(ctx context.Context, accountID, userID, providerID string) (*subscription.Access, error)
 }
 
 // PolicySelectionInput is the per-request selection envelope. The
@@ -150,6 +158,15 @@ type managerImpl struct {
 	// of serving proxy can be diffed without re-deriving it.
 	reconcileMu    sync.Mutex
 	reconcileCache map[string]map[string]syntheticMapping
+
+	// subscriptions holds per-user subscription logins for user_oauth
+	// providers. Built after the options so a test can swap its dependencies.
+	subscriptions      *subscription.Service
+	subscriptionCache  nbcache.Store
+	subscriptionClient *subscription.Client
+	// lookupCatalog resolves catalog entries; tests point it at entries whose
+	// login profile targets a fake issuer.
+	lookupCatalog func(id string) (catalog.Provider, bool)
 }
 
 // ManagerOption replaces a manager dependency at construction. Production
@@ -184,10 +201,21 @@ func NewManager(
 		proxyController:    proxyController,
 		modelDiscovery:     &modeldiscovery.Client{},
 		reconcileCache:     make(map[string]map[string]syntheticMapping),
+		lookupCatalog:      catalog.Lookup,
 	}
 	for _, opt := range opts {
 		opt(m)
 	}
+	if m.subscriptionCache == nil {
+		// Only the redis-backed store can fail to build; without redis
+		// configured this is the in-process store a single replica needs.
+		cache, err := nbcache.NewStore(context.Background(), nbcache.DefaultStoreMaxTimeout, nbcache.DefaultStoreCleanupInterval, nbcache.DefaultStoreMaxConn)
+		if err != nil {
+			log.Errorf("agent network subscription cache unavailable, linking disabled: %v", err)
+		}
+		m.subscriptionCache = cache
+	}
+	m.subscriptions = subscription.NewService(store, m.subscriptionCache, m.subscriptionClient)
 	return m
 }
 

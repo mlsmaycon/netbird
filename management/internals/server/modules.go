@@ -203,6 +203,7 @@ func (s *BaseServer) AgentNetworkManager() agentnetwork.Manager {
 			s.PermissionsManager(),
 			s.AccountManager(),
 			s.ServiceProxyController(),
+			agentnetwork.WithCacheStore(s.CacheStore()),
 		)
 		// Sweep expired agent-network access logs per account retention,
 		// reusing the reverse-proxy cleanup interval config.

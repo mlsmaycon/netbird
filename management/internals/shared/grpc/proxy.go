@@ -26,8 +26,10 @@ import (
 	"golang.org/x/oauth2"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/netbirdio/netbird/management/internals/modules/agentnetwork"
+	"github.com/netbirdio/netbird/management/internals/modules/agentnetwork/subscription"
 	"github.com/netbirdio/netbird/management/internals/modules/peers"
 	"github.com/netbirdio/netbird/management/internals/modules/reverseproxy/accesslogs"
 	"github.com/netbirdio/netbird/management/internals/modules/reverseproxy/activity"
@@ -90,6 +92,12 @@ type AgentNetworkLimitsService interface {
 	RecordUsage(ctx context.Context, in agentnetwork.RecordUsageInput) error
 }
 
+// AgentNetworkCredentialService serves per-user subscription credentials for
+// GetLLMUserCredential.
+type AgentNetworkCredentialService interface {
+	GetUserCredentialAccess(ctx context.Context, accountID, userID, providerID string) (*subscription.Access, error)
+}
+
 type ProxyServiceServer struct {
 	proto.UnimplementedProxyServiceServer
 
@@ -111,6 +119,9 @@ type ProxyServiceServer struct {
 	// and the post-flight consumption write (RecordLLMUsage). Optional — when
 	// nil both RPCs return Unimplemented.
 	agentNetworkLimits AgentNetworkLimitsService
+	// agentNetworkCredentials serves GetLLMUserCredential. Optional — when nil
+	// the RPC returns Unimplemented.
+	agentNetworkCredentials AgentNetworkCredentialService
 	// connectAuthorizer authorizes address claims at proxy connect time.
 	// Optional — when nil every well-formed claim is authorized.
 	connectAuthorizer ProxyConnectAuthorizer
@@ -302,6 +313,14 @@ func (s *ProxyServiceServer) SetAgentNetworkLimitsService(svc AgentNetworkLimits
 	s.mu.Unlock()
 }
 
+// SetAgentNetworkCredentialService wires the per-user subscription credential
+// source behind GetLLMUserCredential.
+func (s *ProxyServiceServer) SetAgentNetworkCredentialService(svc AgentNetworkCredentialService) {
+	s.mu.Lock()
+	s.agentNetworkCredentials = svc
+	s.mu.Unlock()
+}
+
 // agentNetworkSynthesizer returns the synthesiser under read lock.
 func (s *ProxyServiceServer) agentNetworkSynthesizer() AgentNetworkSynthesizer {
 	s.mu.RLock()
@@ -430,6 +449,46 @@ func (s *ProxyServiceServer) RecordLLMUsage(ctx context.Context, req *proto.Reco
 		return nil, status.Error(codes.Internal, "record usage failed")
 	}
 	return &proto.RecordLLMUsageResponse{}, nil
+}
+
+// GetLLMUserCredential returns the upstream headers for the user's linked
+// subscription login. Every outcome other than a usable token is reported in
+// the response status, never as headers, so the proxy can deny with a reason.
+func (s *ProxyServiceServer) GetLLMUserCredential(ctx context.Context, req *proto.GetLLMUserCredentialRequest) (*proto.GetLLMUserCredentialResponse, error) {
+	s.mu.RLock()
+	svc := s.agentNetworkCredentials
+	s.mu.RUnlock()
+	if svc == nil {
+		return nil, status.Errorf(codes.Unimplemented, "agent-network credential service not configured on management")
+	}
+	if req.GetAccountId() == "" || req.GetProviderId() == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "account_id and provider_id are required")
+	}
+	if err := enforceAccountScope(ctx, req.GetAccountId()); err != nil {
+		return nil, err
+	}
+
+	access, err := svc.GetUserCredentialAccess(ctx, req.GetAccountId(), req.GetUserId(), req.GetProviderId())
+	switch {
+	case err == nil:
+	case errors.Is(err, subscription.ErrNotLinked), errors.Is(err, agentnetwork.ErrProviderNotLinkable):
+		return &proto.GetLLMUserCredentialResponse{Status: proto.GetLLMUserCredentialResponse_NOT_LINKED}, nil
+	case errors.Is(err, subscription.ErrRelinkRequired):
+		return &proto.GetLLMUserCredentialResponse{Status: proto.GetLLMUserCredentialResponse_NEEDS_RELINK}, nil
+	default:
+		log.WithContext(ctx).Warnf("get agent network user credential for provider %s: %v", req.GetProviderId(), err)
+		return &proto.GetLLMUserCredentialResponse{Status: proto.GetLLMUserCredentialResponse_UNAVAILABLE}, nil
+	}
+
+	headers := make([]*proto.LLMCredentialHeader, 0, len(access.Headers))
+	for _, h := range access.Headers {
+		headers = append(headers, &proto.LLMCredentialHeader{Name: h.Name, Value: h.Value})
+	}
+	return &proto.GetLLMUserCredentialResponse{
+		Status:    proto.GetLLMUserCredentialResponse_OK,
+		Headers:   headers,
+		ExpiresAt: timestamppb.New(access.ExpiresAt),
+	}, nil
 }
 
 // SetProxyController sets the proxy controller. Must be called before serving.

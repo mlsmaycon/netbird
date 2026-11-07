@@ -352,6 +352,7 @@ func (s *BaseServer) ReverseProxyGRPCServer() *nbgrpc.ProxyServiceServer {
 			proxyService.SetProxyController(s.ServiceProxyController())
 			proxyService.SetAgentNetworkSynthesizer(newAgentNetworkSynthesizer(s.Store()))
 			proxyService.SetAgentNetworkLimitsService(s.AgentNetworkManager())
+			proxyService.SetAgentNetworkCredentialService(s.AgentNetworkManager())
 		})
 		return proxyService
 	})

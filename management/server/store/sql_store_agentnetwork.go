@@ -143,14 +143,24 @@ func (s *SqlStore) SaveAgentNetworkProvider(ctx context.Context, provider *agent
 	return nil
 }
 
+// DeleteAgentNetworkProvider removes a provider record together with every
+// user's linked login for it.
 func (s *SqlStore) DeleteAgentNetworkProvider(ctx context.Context, accountID, providerID string) error {
-	result := s.db.Delete(&agentNetworkTypes.Provider{}, accountAndIDQueryCondition, accountID, providerID)
-	if result.Error != nil {
-		log.WithContext(ctx).Errorf("failed to delete agent network provider from store: %v", result.Error)
+	var affected int64
+	err := s.transaction(ctx, func(tx *gorm.DB) error {
+		if err := tx.Delete(&agentNetworkTypes.UserCredential{}, "account_id = ? AND provider_id = ?", accountID, providerID).Error; err != nil {
+			return err
+		}
+		result := tx.Delete(&agentNetworkTypes.Provider{}, accountAndIDQueryCondition, accountID, providerID)
+		affected = result.RowsAffected
+		return result.Error
+	})
+	if err != nil {
+		log.WithContext(ctx).Errorf("failed to delete agent network provider from store: %v", err)
 		return status.Errorf(status.Internal, "failed to delete agent network provider from store")
 	}
 
-	if result.RowsAffected == 0 {
+	if affected == 0 {
 		return status.NewAgentNetworkProviderNotFoundError(providerID)
 	}
 

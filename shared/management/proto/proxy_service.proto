@@ -55,6 +55,12 @@ service ProxyService {
   // returns. Increments the per-(dimension, window) counters for the
   // attribution policy chosen by CheckLLMPolicyLimits.
   rpc RecordLLMUsage(RecordLLMUsageRequest) returns (RecordLLMUsageResponse);
+
+  // GetLLMUserCredential returns the upstream headers that let the proxy call
+  // a subscription provider as one user. Management holds the user's login and
+  // refreshes it when needed; the proxy only ever receives a short-lived access
+  // token and caches the answer until shortly before expires_at.
+  rpc GetLLMUserCredential(GetLLMUserCredentialRequest) returns (GetLLMUserCredentialResponse);
 }
 
 // ProxyCapabilities describes what a proxy can handle.
@@ -516,4 +522,39 @@ message RecordLLMUsageRequest {
 }
 
 message RecordLLMUsageResponse {
+}
+
+// GetLLMUserCredentialRequest names the user and the provider record chosen by
+// llm_router.
+message GetLLMUserCredentialRequest {
+  string account_id = 1;
+  string user_id = 2;
+  // provider_id is the agent-network provider record id.
+  string provider_id = 3;
+}
+
+// LLMCredentialHeader is one header the proxy injects upstream.
+message LLMCredentialHeader {
+  string name = 1;
+  string value = 2;
+}
+
+// GetLLMUserCredentialResponse carries the headers to inject, or the reason
+// there are none. The proxy denies the request whenever status is not ok.
+message GetLLMUserCredentialResponse {
+  enum Status {
+    // UNSPECIFIED is never sent; a proxy treats it as unavailable.
+    UNSPECIFIED = 0;
+    OK = 1;
+    // NOT_LINKED means the user has not linked a login for this provider.
+    NOT_LINKED = 2;
+    // NEEDS_RELINK means the vendor refused to refresh the login.
+    NEEDS_RELINK = 3;
+    // UNAVAILABLE means management could not obtain a token right now.
+    UNAVAILABLE = 4;
+  }
+  Status status = 1;
+  repeated LLMCredentialHeader headers = 2;
+  // expires_at is when the access token in headers stops being valid.
+  google.protobuf.Timestamp expires_at = 3;
 }

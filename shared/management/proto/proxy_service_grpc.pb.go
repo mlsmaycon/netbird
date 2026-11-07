@@ -53,6 +53,11 @@ type ProxyServiceClient interface {
 	// returns. Increments the per-(dimension, window) counters for the
 	// attribution policy chosen by CheckLLMPolicyLimits.
 	RecordLLMUsage(ctx context.Context, in *RecordLLMUsageRequest, opts ...grpc.CallOption) (*RecordLLMUsageResponse, error)
+	// GetLLMUserCredential returns the upstream headers that let the proxy call
+	// a subscription provider as one user. Management holds the user's login and
+	// refreshes it when needed; the proxy only ever receives a short-lived access
+	// token and caches the answer until shortly before expires_at.
+	GetLLMUserCredential(ctx context.Context, in *GetLLMUserCredentialRequest, opts ...grpc.CallOption) (*GetLLMUserCredentialResponse, error)
 }
 
 type proxyServiceClient struct {
@@ -207,6 +212,15 @@ func (c *proxyServiceClient) RecordLLMUsage(ctx context.Context, in *RecordLLMUs
 	return out, nil
 }
 
+func (c *proxyServiceClient) GetLLMUserCredential(ctx context.Context, in *GetLLMUserCredentialRequest, opts ...grpc.CallOption) (*GetLLMUserCredentialResponse, error) {
+	out := new(GetLLMUserCredentialResponse)
+	err := c.cc.Invoke(ctx, "/management.ProxyService/GetLLMUserCredential", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ProxyServiceServer is the server API for ProxyService service.
 // All implementations must embed UnimplementedProxyServiceServer
 // for forward compatibility
@@ -246,6 +260,11 @@ type ProxyServiceServer interface {
 	// returns. Increments the per-(dimension, window) counters for the
 	// attribution policy chosen by CheckLLMPolicyLimits.
 	RecordLLMUsage(context.Context, *RecordLLMUsageRequest) (*RecordLLMUsageResponse, error)
+	// GetLLMUserCredential returns the upstream headers that let the proxy call
+	// a subscription provider as one user. Management holds the user's login and
+	// refreshes it when needed; the proxy only ever receives a short-lived access
+	// token and caches the answer until shortly before expires_at.
+	GetLLMUserCredential(context.Context, *GetLLMUserCredentialRequest) (*GetLLMUserCredentialResponse, error)
 	mustEmbedUnimplementedProxyServiceServer()
 }
 
@@ -285,6 +304,9 @@ func (UnimplementedProxyServiceServer) CheckLLMPolicyLimits(context.Context, *Ch
 }
 func (UnimplementedProxyServiceServer) RecordLLMUsage(context.Context, *RecordLLMUsageRequest) (*RecordLLMUsageResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RecordLLMUsage not implemented")
+}
+func (UnimplementedProxyServiceServer) GetLLMUserCredential(context.Context, *GetLLMUserCredentialRequest) (*GetLLMUserCredentialResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetLLMUserCredential not implemented")
 }
 func (UnimplementedProxyServiceServer) mustEmbedUnimplementedProxyServiceServer() {}
 
@@ -508,6 +530,24 @@ func _ProxyService_RecordLLMUsage_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ProxyService_GetLLMUserCredential_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetLLMUserCredentialRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProxyServiceServer).GetLLMUserCredential(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/management.ProxyService/GetLLMUserCredential",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProxyServiceServer).GetLLMUserCredential(ctx, req.(*GetLLMUserCredentialRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ProxyService_ServiceDesc is the grpc.ServiceDesc for ProxyService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -550,6 +590,10 @@ var ProxyService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RecordLLMUsage",
 			Handler:    _ProxyService_RecordLLMUsage_Handler,
+		},
+		{
+			MethodName: "GetLLMUserCredential",
+			Handler:    _ProxyService_GetLLMUserCredential_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
