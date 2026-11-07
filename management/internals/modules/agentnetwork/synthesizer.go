@@ -381,6 +381,14 @@ type routerProviderRoute struct {
 	// DiscoveryHost, when set, is the host serving this provider's model
 	// listing, for a vendor that does not serve it from the inference host.
 	DiscoveryHost string `json:"discovery_host,omitempty"`
+	// UserCredential marks a user_oauth provider: the route carries no
+	// credential, and the proxy fetches the calling user's own headers from
+	// management per request.
+	UserCredential bool `json:"user_credential,omitempty"`
+	// RequestPathPrefix is the request path a user_oauth vendor's clients
+	// use. The router serves requests under it only from such routes, and
+	// keeps every other request off them.
+	RequestPathPrefix string `json:"request_path_prefix,omitempty"`
 }
 
 // indexProviderGroups walks the enabled policies and returns, per
@@ -444,13 +452,13 @@ func buildRouterConfigJSON(providers []*types.Provider, groupIndex map[string][]
 			// provider, so it must not be reachable.
 			continue
 		}
-		scheme, host, path, err := parseUpstreamHost(p.UpstreamURL)
-		if err != nil {
-			return nil, fmt.Errorf("router config for provider %s: %w", p.ID, err)
-		}
 		// Lookup rather than assume: an unknown provider id yields the zero
 		// entry, which declares no discovery and so contributes nothing.
 		catalogEntry, _ := catalog.Lookup(p.ProviderID)
+		scheme, host, path, err := parseUpstreamHost(routeUpstreamURL(p, catalogEntry))
+		if err != nil {
+			return nil, fmt.Errorf("router config for provider %s: %w", p.ID, err)
+		}
 		headerName, headerValue, gcpSAKeyB64, err := providerAuthHeader(p)
 		if err != nil {
 			return nil, err
@@ -470,8 +478,10 @@ func buildRouterConfigJSON(providers []*types.Provider, groupIndex map[string][]
 			Vertex:                  catalog.IsVertexPathStyle(p.ProviderID),
 			Bedrock:                 catalog.IsBedrockPathStyle(p.ProviderID),
 			GCPServiceAccountKeyB64: gcpSAKeyB64,
-			SkipTLSVerify:           p.SkipTLSVerification,
+			SkipTLSVerify:           p.SkipTLSVerification && !catalogEntry.UsesUserOAuth(),
 			DiscoveryHost:           discoveryHost(catalogEntry, p.UpstreamURL),
+			UserCredential:          catalogEntry.UsesUserOAuth(),
+			RequestPathPrefix:       userOAuthPathPrefix(catalogEntry),
 		})
 	}
 	out, err := json.Marshal(cfg)
@@ -479,6 +489,25 @@ func buildRouterConfigJSON(providers []*types.Provider, groupIndex map[string][]
 		return nil, fmt.Errorf("marshal llm_router middleware config: %w", err)
 	}
 	return out, nil
+}
+
+// routeUpstreamURL is where the router sends a provider's requests. A
+// user_oauth route always goes to the catalog's vendor host, whatever the
+// record says: the users' own tokens must never reach a host the vendor does
+// not own, even if a stored record predates the check that pins it.
+func routeUpstreamURL(p *types.Provider, entry catalog.Provider) string {
+	if entry.UsesUserOAuth() {
+		return "https://" + entry.DefaultHost
+	}
+	return p.UpstreamURL
+}
+
+// userOAuthPathPrefix returns the request path prefix of a user_oauth entry.
+func userOAuthPathPrefix(entry catalog.Provider) string {
+	if !entry.UsesUserOAuth() {
+		return ""
+	}
+	return entry.OAuth.RequestPathPrefix
 }
 
 // discoveryHost returns the host serving this provider's model listing when it
@@ -1087,6 +1116,11 @@ func providerAuthHeader(p *types.Provider) (name, value, gcpSAKeyB64 string, err
 	}
 	if entry.AuthHeaderName == "" || entry.AuthHeaderTemplate == "" {
 		return "", "", "", fmt.Errorf("catalog entry %q has no auth header configured", p.ProviderID)
+	}
+	// The credential is the calling user's own, fetched by the proxy per
+	// request; the route carries none, and SkipTLSVerify stays off.
+	if entry.UsesUserOAuth() {
+		return entry.AuthHeaderName, "", "", nil
 	}
 	if p.APIKey == "" {
 		return "", "", "", fmt.Errorf("provider %s has no api key", p.ID)

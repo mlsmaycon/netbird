@@ -52,6 +52,18 @@ func (s *SqlStore) GetAccountAgentNetworkUserCredentialStatuses(ctx context.Cont
 	return creds, nil
 }
 
+// GetUserAgentNetworkCredentialStatuses lists one user's linked logins
+// without their tokens.
+func (s *SqlStore) GetUserAgentNetworkCredentialStatuses(ctx context.Context, accountID, userID string) ([]*agentNetworkTypes.UserCredential, error) {
+	var creds []*agentNetworkTypes.UserCredential
+	result := s.db.WithContext(ctx).Select(userCredentialStatusColumns).Find(&creds, "account_id = ? AND user_id = ?", accountID, userID)
+	if result.Error != nil {
+		log.WithContext(ctx).Errorf("failed to list user agent network credentials from store: %v", result.Error)
+		return nil, status.Errorf(status.Internal, "failed to list agent network user credentials from store")
+	}
+	return creds, nil
+}
+
 // LinkAgentNetworkUserCredential stores a freshly linked login, replacing any
 // previous one for the same user and provider record. The version continues
 // from the replaced row so a refresh racing the relink loses its swap.

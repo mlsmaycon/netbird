@@ -5093,7 +5093,7 @@ components:
           example: "https://api.openai.com"
         api_key:
           type: string
-          description: Upstream provider API key. Sealed at rest on the management server and never returned in responses. Required on create; optional on update (omit to keep the existing key).
+          description: Upstream provider API key. Sealed at rest on the management server and never returned in responses. Required on create for every catalog entry whose credential_kind is not user_oauth; optional on update (omit to keep the existing key). Ignored for user_oauth entries, where each user links their own login instead.
           example: "sk-..."
         models:
           type: array
@@ -5343,6 +5343,17 @@ components:
             $ref: '#/components/schemas/AgentNetworkCatalogExtraHeader'
         identity_injection:
           $ref: '#/components/schemas/AgentNetworkCatalogIdentityInjection'
+        credential_kind:
+          type: string
+          description: |
+            Where the upstream credential comes from.
+            "static_key" — the operator's api_key, sent as is.
+            "gcp_service_account" — a static bearer, or a "keyfile::<base64 service-account JSON>" api_key the proxy mints Google tokens from.
+            "user_oauth" — no operator key: each user links their own subscription login, see subscription_login.
+          enum: [static_key, gcp_service_account, user_oauth]
+          example: "static_key"
+        subscription_login:
+          $ref: '#/components/schemas/AgentNetworkCatalogSubscriptionLogin'
         pricing_surfaces:
           type: array
           description: |
@@ -5365,6 +5376,7 @@ components:
         - brand_color
         - kind
         - models
+        - credential_kind
     AgentNetworkCatalogIdentityInjection:
       type: object
       description: |
@@ -5689,6 +5701,114 @@ components:
       required:
         - name
         - checks
+    AgentNetworkCatalogSubscriptionLogin:
+      type: object
+      description: How users link their own subscription for a user_oauth catalog entry.
+      properties:
+        flow:
+          type: string
+          description: |
+            "device" — the user enters a short code on the vendor's page (verification_uri) and the dashboard polls until they approve.
+          enum: [device]
+          example: "device"
+        verification_uri:
+          type: string
+          description: The vendor page where the user enters their code.
+          example: "https://auth.openai.com/codex/device"
+      required:
+        - flow
+        - verification_uri
+    AgentNetworkSubscriptionLink:
+      type: object
+      description: The caller's own link state for a user_oauth provider. Never carries tokens.
+      properties:
+        status:
+          type: string
+          description: |
+            "linked" — requests go out under the caller's subscription.
+            "not_linked" — the caller has not linked a login; requests are refused until they do.
+            "needs_relink" — the vendor refused to refresh the login; the caller must link again.
+          enum: [linked, not_linked, needs_relink]
+          example: "linked"
+        plan_type:
+          type: string
+          description: The vendor plan reported at link or refresh time, when known.
+          example: "plus"
+        linked_at:
+          type: string
+          format: date-time
+          description: When the current login was linked.
+      required:
+        - status
+    AgentNetworkProviderLinkFlow:
+      type: object
+      description: A subscription login in progress. Show user_code and verification_uri to the user, then poll until status leaves "pending".
+      properties:
+        id:
+          type: string
+          description: Flow identifier for polling. Bound to the caller who started it.
+          example: "4dS1v8wq0J7m3yq4tPz0o3s2pJ7hV0kQ"
+        status:
+          type: string
+          description: |
+            "pending" — waiting for the user to approve on the vendor's page.
+            "linked" — the login is stored; the flow is finished.
+            "expired" — the code expired before approval; start a new flow.
+            "failed" — the vendor refused the login; start a new flow.
+          enum: [pending, linked, expired, failed]
+          example: "pending"
+        user_code:
+          type: string
+          description: The code the user enters on the vendor's page.
+          example: "ABCD-1234"
+        verification_uri:
+          type: string
+          description: The vendor page where the user enters user_code.
+          example: "https://auth.openai.com/codex/device"
+        expires_at:
+          type: string
+          format: date-time
+          description: When user_code stops being accepted.
+        interval_seconds:
+          type: integer
+          description: The shortest useful polling interval. Polling faster does no harm but returns the same answer.
+          example: 5
+      required:
+        - id
+        - status
+        - user_code
+        - verification_uri
+        - expires_at
+        - interval_seconds
+    AgentNetworkProviderUserLink:
+      type: object
+      description: One user's link state for a user_oauth provider, for administrators. Never carries tokens.
+      properties:
+        user_id:
+          type: string
+          description: The user who linked the login.
+          example: "edafee4e-63fb-11ec-90d6-0242ac120003"
+        status:
+          type: string
+          enum: [linked, needs_relink]
+          description: Whether the login can still be refreshed.
+          example: "linked"
+        plan_type:
+          type: string
+          description: The vendor plan reported for the login, when known.
+          example: "pro"
+        linked_at:
+          type: string
+          format: date-time
+          description: When the login was linked.
+        last_refreshed_at:
+          type: string
+          format: date-time
+          description: When management last refreshed the login's access token.
+      required:
+        - user_id
+        - status
+        - linked_at
     AgentNetworkAgentConfig:
       type: object
       description: The caller-scoped Agent Network connection config backing the self-service "Connect your agent" view. Available to every authenticated user; the providers are computed from the caller's own groups and the answer carries display metadata only.
@@ -5713,6 +5833,10 @@ components:
       type: object
       description: One provider the caller may use, reduced to what a local tool needs for configuration.
       properties:
+        id:
+          type: string
+          description: Provider record id, used by the subscription link endpoints.
+          example: "ainp_d1m3kebd9pcs0c1pnu7g"
         name:
           type: string
           description: Operator-assigned provider label.
@@ -5734,8 +5858,17 @@ components:
           items:
             type: string
           example: [ "anthropic.claude-sonnet-4-5" ]
+        credential_kind:
+          type: string
+          description: Where the upstream credential comes from; see AgentNetworkCatalogProvider.credential_kind.
+          enum: [static_key, gcp_service_account, user_oauth]
+          example: "static_key"
+        subscription_link:
+          $ref: '#/components/schemas/AgentNetworkSubscriptionLink'
       required:
+        - id
         - name
+        - credential_kind
         - catalog_id
         - api_flavor
         - all_models_allowed
@@ -14024,6 +14157,136 @@ paths:
           description: Provider deleted
         '400':
           "$ref": "#/components/responses/bad_request"
+        '401':
+          "$ref": "#/components/responses/requires_authentication"
+        '403':
+          "$ref": "#/components/responses/forbidden"
+        '404':
+          "$ref": "#/components/responses/not_found"
+        '500':
+          "$ref": "#/components/responses/internal_error"
+  /api/agent-network/providers/{providerId}/link:
+    post:
+      summary: Start linking the caller's subscription
+      description: |
+        Starts a subscription login for the caller on a user_oauth provider their policies authorize. Returns a code to show the user and the vendor page to enter it on; poll the returned flow until it leaves "pending". Linking replaces any login the caller already has for this provider. A caller can only ever link their own login.
+      tags: [ Agent Network ]
+      security:
+        - BearerAuth: [ ]
+        - TokenAuth: [ ]
+      parameters:
+        - in: path
+          name: providerId
+          required: true
+          schema:
+            type: string
+          description: The unique identifier of an Agent Network provider
+      responses:
+        '200':
+          description: The started login flow
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentNetworkProviderLinkFlow'
+        '400':
+          "$ref": "#/components/responses/bad_request"
+        '401':
+          "$ref": "#/components/responses/requires_authentication"
+        '404':
+          "$ref": "#/components/responses/not_found"
+        '412':
+          description: The vendor has device login turned off, or this server cannot hold subscription logins (no datastore encryption key).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          "$ref": "#/components/responses/internal_error"
+    delete:
+      summary: Unlink the caller's subscription
+      description: Forgets the caller's own login for this provider. Requests the caller sends through the provider are refused until they link again. Succeeds when nothing is linked.
+      tags: [ Agent Network ]
+      security:
+        - BearerAuth: [ ]
+        - TokenAuth: [ ]
+      parameters:
+        - in: path
+          name: providerId
+          required: true
+          schema:
+            type: string
+          description: The unique identifier of an Agent Network provider
+      responses:
+        '200':
+          description: The login was removed
+          content:
+            application/json:
+              schema:
+                type: object
+        '401':
+          "$ref": "#/components/responses/requires_authentication"
+        '500':
+          "$ref": "#/components/responses/internal_error"
+  /api/agent-network/providers/{providerId}/link/{flowId}:
+    get:
+      summary: Poll a subscription login
+      description: Returns the state of a login flow the caller started. The vendor is contacted at most once per interval, so polling faster returns the same answer. A flow started by another user reads as not found.
+      tags: [ Agent Network ]
+      security:
+        - BearerAuth: [ ]
+        - TokenAuth: [ ]
+      parameters:
+        - in: path
+          name: providerId
+          required: true
+          schema:
+            type: string
+          description: The unique identifier of an Agent Network provider
+        - in: path
+          name: flowId
+          required: true
+          schema:
+            type: string
+          description: The flow id returned when the login was started
+      responses:
+        '200':
+          description: The login flow
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentNetworkProviderLinkFlow'
+        '400':
+          "$ref": "#/components/responses/bad_request"
+        '401':
+          "$ref": "#/components/responses/requires_authentication"
+        '404':
+          "$ref": "#/components/responses/not_found"
+        '500':
+          "$ref": "#/components/responses/internal_error"
+  /api/agent-network/providers/{providerId}/links:
+    get:
+      summary: List users' subscription links
+      description: Lists which users have linked a subscription login for a user_oauth provider and whether each can still be refreshed. Requires permission to read providers. Never returns tokens.
+      tags: [ Agent Network ]
+      security:
+        - BearerAuth: [ ]
+        - TokenAuth: [ ]
+      parameters:
+        - in: path
+          name: providerId
+          required: true
+          schema:
+            type: string
+          description: The unique identifier of an Agent Network provider
+      responses:
+        '200':
+          description: The users' link states
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AgentNetworkProviderUserLink'
         '401':
           "$ref": "#/components/responses/requires_authentication"
         '403':

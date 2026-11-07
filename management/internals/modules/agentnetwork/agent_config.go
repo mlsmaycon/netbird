@@ -23,7 +23,35 @@ func (m *managerImpl) GetAgentConfigForUser(ctx context.Context, accountID, user
 	if err != nil {
 		return nil, fmt.Errorf("get user: %w", err)
 	}
-	return m.agentConfigForGroups(ctx, accountID, user.AutoGroups)
+	cfg, err := m.agentConfigForGroups(ctx, accountID, user.AutoGroups)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.attachLinkStates(ctx, accountID, userID, cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// attachLinkStates adds the caller's own link state to every user_oauth
+// provider in cfg, so the connect page can offer to link or relink.
+func (m *managerImpl) attachLinkStates(ctx context.Context, accountID, userID string, cfg *types.AgentConfig) error {
+	var states map[string]*types.UserCredential
+	for i := range cfg.Providers {
+		p := &cfg.Providers[i]
+		if p.CredentialKind != string(catalog.CredentialUserOAuth) {
+			continue
+		}
+		if states == nil {
+			loaded, err := m.linkStates(ctx, accountID, userID)
+			if err != nil {
+				return err
+			}
+			states = loaded
+		}
+		p.SubscriptionLink = types.LinkStateFromCredential(states[p.ID])
+	}
+	return nil
 }
 
 // agentConfigForGroups computes the effective Agent Network setup for
@@ -82,10 +110,14 @@ func (m *managerImpl) agentConfigForGroups(ctx context.Context, accountID string
 	for _, p := range authorized {
 		allAllowed, models := effectiveModelsForProvider(p, policiesForProvider(applicable, p.ID), guardrailsByID)
 		flavor := ""
+		kind := catalog.CredentialStaticKey
 		if entry, ok := catalog.Lookup(p.ProviderID); ok {
 			flavor = entry.ParserID
+			kind = entry.EffectiveCredentialKind()
 		}
 		out.Providers = append(out.Providers, types.AgentConfigProvider{
+			ID:               p.ID,
+			CredentialKind:   string(kind),
 			Name:             p.Name,
 			CatalogID:        p.ProviderID,
 			APIFlavor:        flavor,

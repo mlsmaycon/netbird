@@ -47,6 +47,7 @@ func RegisterEndpoints(manager agentnetwork.Manager, router *mux.Router) {
 	h.addAccessLogEndpoints(router)
 	h.addBudgetRuleEndpoints(router)
 	h.addAgentConfigEndpoints(router)
+	h.addSubscriptionLinkEndpoints(router)
 }
 
 func (h *handler) getCatalogProviders(w http.ResponseWriter, r *http.Request) {
@@ -336,6 +337,15 @@ func validate(req *api.AgentNetworkProviderRequest, requireAPIKey bool) error {
 	u, err := url.Parse(strings.TrimSpace(req.UpstreamUrl))
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return status.Errorf(status.InvalidArgument, "upstream_url must be a full http(s) URL")
+	}
+	entry, _ := catalog.Lookup(req.ProviderId)
+	if entry.UsesUserOAuth() {
+		// Each user links their own login; an operator key has no use and is
+		// refused rather than silently stored.
+		if req.ApiKey != nil && strings.TrimSpace(*req.ApiKey) != "" {
+			return status.Errorf(status.InvalidArgument, "api_key is not accepted for %s: each user links their own subscription", req.ProviderId)
+		}
+		requireAPIKey = false
 	}
 	if requireAPIKey && (req.ApiKey == nil || strings.TrimSpace(*req.ApiKey) == "") {
 		return status.Errorf(status.InvalidArgument, "api_key is required")

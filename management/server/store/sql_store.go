@@ -304,3 +304,9 @@ func (s *SqlStore) GetDB() *gorm.DB {
 func (s *SqlStore) SetFieldEncrypt(enc *crypt.FieldEncrypt) {
 	s.fieldEncrypt = enc
 }
+
+// FieldEncryptionEnabled reports whether a field encryptor is configured.
+// Data that must never be stored in plaintext is refused without one.
+func (s *SqlStore) FieldEncryptionEnabled() bool {
+	return s.fieldEncrypt != nil
+}

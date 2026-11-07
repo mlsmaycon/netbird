@@ -94,6 +94,7 @@ func newAgentNetworkHandlerFixture(t *testing.T) *agentNetworkHandlerFixture {
 	h.addConsumptionEndpoints(router)
 	h.addBudgetRuleEndpoints(router)
 	h.addSettingsEndpoints(router)
+	h.addSubscriptionLinkEndpoints(router)
 
 	return &agentNetworkHandlerFixture{
 		store:   st,

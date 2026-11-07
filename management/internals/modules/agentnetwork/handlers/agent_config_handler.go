@@ -41,6 +41,9 @@ func agentConfigToAPI(setup *types.AgentConfig) api.AgentNetworkAgentConfig {
 	providers := make([]api.AgentNetworkAgentConfigProvider, 0, len(setup.Providers))
 	for _, p := range setup.Providers {
 		providers = append(providers, api.AgentNetworkAgentConfigProvider{
+			Id:               p.ID,
+			CredentialKind:   api.AgentNetworkAgentConfigProviderCredentialKind(p.CredentialKind),
+			SubscriptionLink: subscriptionLinkToAPI(p.SubscriptionLink),
 			Name:             p.Name,
 			CatalogId:        p.CatalogID,
 			ApiFlavor:        p.APIFlavor,

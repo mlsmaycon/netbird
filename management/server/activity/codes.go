@@ -301,6 +301,10 @@ const (
 	MCPClientSignedOut Activity = 147
 	// MCPSessionRevokedOnTokenReuse indicates that an MCP session was revoked because a refresh token or an authorization code was used twice
 	MCPSessionRevokedOnTokenReuse Activity = 148
+	// AgentNetworkSubscriptionLinked indicates that a user linked their own subscription login to an Agent Network provider
+	AgentNetworkSubscriptionLinked Activity = 149
+	// AgentNetworkSubscriptionUnlinked indicates that a user unlinked their own subscription login from an Agent Network provider
+	AgentNetworkSubscriptionUnlinked Activity = 150
 
 	AccountDeleted Activity = 99999
 )
@@ -486,9 +490,11 @@ var activityMap = map[Activity]Code{
 	DomainValidated:               {"Domain validated", "domain.validate"},
 	CustomDomainValidationExpired: {"Unvalidated domain registration expired", "domain.validation.expire"},
 
-	MCPClientSignedIn:             {"MCP client signed in", "mcp.session.start"},
-	MCPClientSignedOut:            {"MCP client signed out", "mcp.session.revoke"},
-	MCPSessionRevokedOnTokenReuse: {"MCP session revoked after token reuse", "mcp.session.replay"},
+	MCPClientSignedIn:                {"MCP client signed in", "mcp.session.start"},
+	MCPClientSignedOut:               {"MCP client signed out", "mcp.session.revoke"},
+	MCPSessionRevokedOnTokenReuse:    {"MCP session revoked after token reuse", "mcp.session.replay"},
+	AgentNetworkSubscriptionLinked:   {"Agent Network subscription linked", "agent_network.subscription.link"},
+	AgentNetworkSubscriptionUnlinked: {"Agent Network subscription unlinked", "agent_network.subscription.unlink"},
 }
 
 // StringCode returns a string code of the activity

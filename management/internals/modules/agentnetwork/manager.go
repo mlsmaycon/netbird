@@ -102,6 +102,16 @@ type Manager interface {
 	// linked subscription login, refreshing it when needed. It backs the
 	// proxy's GetLLMUserCredential RPC.
 	GetUserCredentialAccess(ctx context.Context, accountID, userID, providerID string) (*subscription.Access, error)
+
+	// StartProviderLink, PollProviderLink and UnlinkProvider manage the
+	// caller's own subscription login for a user_oauth provider. They are
+	// caller-scoped: nobody can link or unlink a login for someone else.
+	StartProviderLink(ctx context.Context, accountID, userID, providerID string) (*subscription.Flow, error)
+	PollProviderLink(ctx context.Context, accountID, userID, providerID, flowID string) (*subscription.Flow, error)
+	UnlinkProvider(ctx context.Context, accountID, userID, providerID string) error
+	// ListProviderLinks lists every user's link state for a provider, without
+	// tokens, for callers who may read providers.
+	ListProviderLinks(ctx context.Context, accountID, userID, providerID string) ([]*types.UserCredential, error)
 }
 
 // PolicySelectionInput is the per-request selection envelope. The
@@ -400,23 +410,30 @@ func (m *managerImpl) CreateProvider(ctx context.Context, userID string, provide
 		return nil, err
 	}
 
-	// An empty api_key would silently produce a synthesised service
-	// that 401s on every upstream request. Surface the misconfiguration
-	// at create time instead.
-	if strings.TrimSpace(provider.APIKey) == "" {
-		return nil, status.Errorf(status.InvalidArgument, "api_key is required when creating an agent network provider")
-	}
-	// Stored as it will be sent. The vendor call below trims the key before
-	// building the auth header while the synthesiser substitutes the stored
-	// value verbatim, so a key pasted with surrounding whitespace would pass
-	// its check and then fail every request the provider serves.
-	provider.APIKey = strings.TrimSpace(provider.APIKey)
+	if entry, ok := m.lookupCatalog(provider.ProviderID); ok && entry.UsesUserOAuth() {
+		// No operator credential to check: each user links their own login.
+		if err := pinUserOAuthProvider(provider, entry); err != nil {
+			return nil, err
+		}
+	} else {
+		// An empty api_key would silently produce a synthesised service
+		// that 401s on every upstream request. Surface the misconfiguration
+		// at create time instead.
+		if strings.TrimSpace(provider.APIKey) == "" {
+			return nil, status.Errorf(status.InvalidArgument, "api_key is required when creating an agent network provider")
+		}
+		// Stored as it will be sent. The vendor call below trims the key before
+		// building the auth header while the synthesiser substitutes the stored
+		// value verbatim, so a key pasted with surrounding whitespace would pass
+		// its check and then fail every request the provider serves.
+		provider.APIKey = strings.TrimSpace(provider.APIKey)
 
-	// Before anything is persisted: a record whose upstream or credential does
-	// not work is rejected here rather than discovered later as a failed
-	// request with nothing pointing back at it.
-	if err := m.checkProviderCredential(ctx, provider); err != nil {
-		return nil, err
+		// Before anything is persisted: a record whose upstream or credential does
+		// not work is rejected here rather than discovered later as a failed
+		// request with nothing pointing back at it.
+		if err := m.checkProviderCredential(ctx, provider); err != nil {
+			return nil, err
+		}
 	}
 
 	if provider.ID == "" {
@@ -450,6 +467,57 @@ func (m *managerImpl) UpdateProvider(ctx context.Context, userID string, provide
 		return nil, fmt.Errorf("failed to get agent network provider: %w", err)
 	}
 
+	if err := m.applyProviderCredentialUpdate(ctx, provider, existing); err != nil {
+		return nil, err
+	}
+
+	// Always preserve the session keypair across updates so existing
+	// session cookies stay valid. The keys are server-managed and
+	// never surfaced through the API.
+	provider.SessionPrivateKey = existing.SessionPrivateKey
+	provider.SessionPublicKey = existing.SessionPublicKey
+	if err := ensureSessionKeys(provider); err != nil {
+		return nil, err
+	}
+	provider.CreatedAt = existing.CreatedAt
+	provider.UpdatedAt = time.Now().UTC()
+
+	if err := m.store.SaveAgentNetworkProvider(ctx, provider); err != nil {
+		return nil, fmt.Errorf("save agent network provider: %w", err)
+	}
+	if m.leftUserOAuth(existing, provider) {
+		// Logins were for the old catalog entry's vendor; nothing may present
+		// them anywhere else.
+		if err := m.store.DeleteAgentNetworkUserCredentialsForProvider(ctx, provider.AccountID, provider.ID); err != nil {
+			return nil, fmt.Errorf("delete subscription logins of retyped provider: %w", err)
+		}
+	}
+
+	m.accountManager.StoreEvent(ctx, userID, provider.ID, provider.AccountID, activity.AgentNetworkProviderUpdated, provider.EventMeta())
+	m.reconcile(ctx, provider.AccountID)
+
+	return provider, nil
+}
+
+// leftUserOAuth reports whether an update moved a record off a user_oauth
+// catalog entry (or onto a different one).
+func (m *managerImpl) leftUserOAuth(existing, updated *types.Provider) bool {
+	if existing.ProviderID == updated.ProviderID {
+		return false
+	}
+	entry, ok := m.lookupCatalog(existing.ProviderID)
+	return ok && entry.UsesUserOAuth()
+}
+
+// applyProviderCredentialUpdate merges and checks the credential side of an
+// update: user_oauth records carry no key and are pinned to the vendor host,
+// every other record keeps or rotates its key and is checked against the
+// vendor when the key, upstream or catalog entry changes.
+func (m *managerImpl) applyProviderCredentialUpdate(ctx context.Context, provider, existing *types.Provider) error {
+	if entry, ok := m.lookupCatalog(provider.ProviderID); ok && entry.UsesUserOAuth() {
+		return pinUserOAuthProvider(provider, entry)
+	}
+
 	// Preserve the API key if the caller didn't rotate it. A
 	// whitespace-only value is treated as "not rotated" rather than a
 	// real key, but it must not silently overwrite a valid stored key.
@@ -462,11 +530,15 @@ func (m *managerImpl) UpdateProvider(ctx context.Context, userID string, provide
 		// never been tested in the form it is about to be sent in.
 		provider.APIKey = strings.TrimSpace(existing.APIKey)
 	case trimmed == "":
-		return nil, status.Errorf(status.InvalidArgument, "api_key must be non-blank when rotating an agent network provider")
+		return status.Errorf(status.InvalidArgument, "api_key must be non-blank when rotating an agent network provider")
 	default:
 		// See CreateProvider: the key is stored in the form the proxy will
 		// send, so the check below tests what the provider will actually use.
 		provider.APIKey = trimmed
+	}
+	if provider.APIKey == "" {
+		// A record moving off a user_oauth entry has no stored key to keep.
+		return status.Errorf(status.InvalidArgument, "api_key is required for %s", provider.ProviderID)
 	}
 
 	// Only the fields the vendor would judge are worth a round-trip. This same
@@ -489,30 +561,9 @@ func (m *managerImpl) UpdateProvider(ctx context.Context, userID string, provide
 		provider.APIKey != existing.APIKey ||
 		provider.ProviderID != existing.ProviderID ||
 		(existing.SkipTLSVerification && !provider.SkipTLSVerification) {
-		if err := m.checkProviderCredential(ctx, provider); err != nil {
-			return nil, err
-		}
+		return m.checkProviderCredential(ctx, provider)
 	}
-
-	// Always preserve the session keypair across updates so existing
-	// session cookies stay valid. The keys are server-managed and
-	// never surfaced through the API.
-	provider.SessionPrivateKey = existing.SessionPrivateKey
-	provider.SessionPublicKey = existing.SessionPublicKey
-	if err := ensureSessionKeys(provider); err != nil {
-		return nil, err
-	}
-	provider.CreatedAt = existing.CreatedAt
-	provider.UpdatedAt = time.Now().UTC()
-
-	if err := m.store.SaveAgentNetworkProvider(ctx, provider); err != nil {
-		return nil, fmt.Errorf("save agent network provider: %w", err)
-	}
-
-	m.accountManager.StoreEvent(ctx, userID, provider.ID, provider.AccountID, activity.AgentNetworkProviderUpdated, provider.EventMeta())
-	m.reconcile(ctx, provider.AccountID)
-
-	return provider, nil
+	return nil
 }
 
 func (m *managerImpl) DeleteProvider(ctx context.Context, accountID, userID, providerID string) error {

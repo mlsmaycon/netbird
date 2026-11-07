@@ -1,5 +1,7 @@
 package types
 
+import "time"
+
 // AgentConfig is the caller-scoped answer to "what may this caller
 // use on the Agent Network?" — the account's proxy endpoint plus the
 // providers and models the caller's groups authorize. It intentionally
@@ -24,6 +26,9 @@ type AgentConfig struct {
 
 // AgentConfigProvider is one authorized provider in an AgentConfig.
 type AgentConfigProvider struct {
+	// ID is the provider record id, which the subscription link endpoints
+	// take.
+	ID string
 	// Name is the operator-assigned label, e.g. "Bedrock prod".
 	Name string
 	// CatalogID names the catalog entry, e.g. "anthropic_api".
@@ -39,4 +44,41 @@ type AgentConfigProvider struct {
 	// Models is the effective model allowlist for the caller, or the
 	// declared/catalog models when AllModelsAllowed is true.
 	Models []string
+	// CredentialKind is the catalog entry's credential kind.
+	CredentialKind string
+	// SubscriptionLink is the caller's own link state, set only for
+	// user_oauth providers.
+	SubscriptionLink *SubscriptionLinkState
+}
+
+// SubscriptionLinkStatus is the caller-facing state of a subscription login.
+type SubscriptionLinkStatus string
+
+const (
+	SubscriptionLinked      SubscriptionLinkStatus = "linked"
+	SubscriptionNotLinked   SubscriptionLinkStatus = "not_linked"
+	SubscriptionNeedsRelink SubscriptionLinkStatus = "needs_relink"
+)
+
+// SubscriptionLinkState is one user's link state for one provider record.
+// It never carries tokens.
+type SubscriptionLinkState struct {
+	Status   SubscriptionLinkStatus
+	PlanType string
+	// LinkedAt is nil when nothing is linked.
+	LinkedAt *time.Time
+}
+
+// LinkStateFromCredential maps a stored login (nil when absent) to its
+// caller-facing state.
+func LinkStateFromCredential(cred *UserCredential) *SubscriptionLinkState {
+	if cred == nil {
+		return &SubscriptionLinkState{Status: SubscriptionNotLinked}
+	}
+	linkedAt := cred.CreatedAt
+	state := &SubscriptionLinkState{Status: SubscriptionLinked, PlanType: cred.PlanType, LinkedAt: &linkedAt}
+	if cred.Status != UserCredentialActive {
+		state.Status = SubscriptionNeedsRelink
+	}
+	return state
 }

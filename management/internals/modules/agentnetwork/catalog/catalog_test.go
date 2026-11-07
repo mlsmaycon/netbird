@@ -108,3 +108,35 @@ func TestGCPServiceAccountKey(t *testing.T) {
 	_, ok = GCPServiceAccountKey("sk-plain")
 	assert.False(t, ok, "a plain bearer is not a service-account key")
 }
+
+func TestChatGPTCodexEntry(t *testing.T) {
+	entry, ok := Lookup("chatgpt_codex")
+	require.True(t, ok)
+	require.True(t, entry.UsesUserOAuth())
+	assert.Equal(t, "chatgpt.com", entry.DefaultHost)
+	assert.Equal(t, "openai", entry.ParserID, "Codex speaks the Responses API")
+	assert.Empty(t, entry.PricingSurfaces, "subscription usage must not be priced at API rates")
+	assert.Equal(t, OAuthFlowDevice, entry.OAuth.Flow)
+	assert.Equal(t, "/backend-api/codex", entry.OAuth.RequestPathPrefix)
+
+	resp := entry.ToAPIResponse()
+	assert.Equal(t, api.AgentNetworkCatalogProviderCredentialKindUserOauth, resp.CredentialKind)
+	require.NotNil(t, resp.SubscriptionLogin)
+	assert.Equal(t, "https://auth.openai.com/codex/device", resp.SubscriptionLogin.VerificationUri)
+
+	openai, _ := Lookup("openai_api")
+	openaiResp := openai.ToAPIResponse()
+	assert.Equal(t, api.AgentNetworkCatalogProviderCredentialKindStaticKey, openaiResp.CredentialKind)
+	assert.Nil(t, openaiResp.SubscriptionLogin)
+}
+
+// Anthropic forbids third parties from holding Claude.ai logins, so no
+// Anthropic-hosted entry may ever be a subscription login.
+func TestNoAnthropicSubscriptionLogin(t *testing.T) {
+	for _, p := range All() {
+		if p.UsesUserOAuth() {
+			assert.NotContains(t, p.OAuth.Issuer, "anthropic", "entry %s", p.ID)
+			assert.NotContains(t, p.OAuth.Issuer, "claude.ai", "entry %s", p.ID)
+		}
+	}
+}

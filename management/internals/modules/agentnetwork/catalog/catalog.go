@@ -455,6 +455,45 @@ var providers = []Provider{
 		},
 	},
 	{
+		// ChatGPT plans include Codex usage. NetBird holds each user's own
+		// ChatGPT login (OpenAI has authorised this for NetBird) and the proxy
+		// presents it upstream, so no operator key exists. Codex's public
+		// client id only accepts loopback redirects, hence the device flow.
+		ID:                 "chatgpt_codex",
+		Kind:               KindProvider,
+		Name:               "ChatGPT (Codex)",
+		Description:        "Codex on each user's own ChatGPT plan",
+		DefaultHost:        "chatgpt.com",
+		AuthHeaderName:     "Authorization",
+		AuthHeaderTemplate: "Bearer ${API_KEY}",
+		DefaultContentType: "application/json",
+		BrandColor:         "#10A37F",
+		ParserID:           "openai",
+		// Usage is billed to the user's plan, not at API rates, so the entry
+		// declares no priced models and no pricing surfaces.
+		CredentialKind: CredentialUserOAuth,
+		OAuth: &OAuthProfile{ //nolint:gosec // public client id and endpoints, no secret
+			Issuer:            "https://auth.openai.com",
+			ClientID:          "app_EMoamEEZ73f0CkXaXp7hrann",
+			Flow:              OAuthFlowDevice,
+			Scopes:            []string{"openid", "profile", "email", "offline_access"},
+			DeviceCodeURL:     "https://auth.openai.com/api/accounts/deviceauth/usercode",
+			DeviceTokenURL:    "https://auth.openai.com/api/accounts/deviceauth/token",
+			VerificationURI:   "https://auth.openai.com/codex/device",
+			DeviceRedirectURI: "https://auth.openai.com/deviceauth/callback",
+			DeviceCodeTTL:     15 * time.Minute,
+			TokenURL:          "https://auth.openai.com/oauth/token",
+			ClaimsNamespace:   "https://api.openai.com/auth",
+			AccountIDClaim:    "chatgpt_account_id",
+			PlanTypeClaim:     "chatgpt_plan_type",
+			FedRAMPClaim:      "chatgpt_account_is_fedramp",
+			AccountIDHeader:   "chatgpt-account-id",
+			FedRAMPHeader:     "X-OpenAI-Fedramp",
+			RequestPathPrefix: "/backend-api/codex",
+		},
+		Models: []Model{},
+	},
+	{
 		ID:                 "anthropic_api",
 		Kind:               KindProvider,
 		Name:               "Anthropic API",
@@ -1101,6 +1140,13 @@ func (p Provider) ToAPIResponse() api.AgentNetworkCatalogProvider {
 	if len(p.PricingSurfaces) > 0 {
 		surfaces := append([]string(nil), p.PricingSurfaces...)
 		resp.PricingSurfaces = &surfaces
+	}
+	resp.CredentialKind = api.AgentNetworkCatalogProviderCredentialKind(p.EffectiveCredentialKind())
+	if p.UsesUserOAuth() {
+		resp.SubscriptionLogin = &api.AgentNetworkCatalogSubscriptionLogin{
+			Flow:            api.AgentNetworkCatalogSubscriptionLoginFlow(p.OAuth.Flow),
+			VerificationUri: p.OAuth.VerificationURI,
+		}
 	}
 	if len(p.ExtraHeaders) > 0 {
 		extras := make([]api.AgentNetworkCatalogExtraHeader, 0, len(p.ExtraHeaders))

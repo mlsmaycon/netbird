@@ -1026,6 +1026,20 @@ func (mr *MockStoreMockRecorder) ExecuteInTransaction(ctx, f any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExecuteInTransaction", reflect.TypeOf((*MockStore)(nil).ExecuteInTransaction), ctx, f)
 }
 
+// FieldEncryptionEnabled mocks base method.
+func (m *MockStore) FieldEncryptionEnabled() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FieldEncryptionEnabled")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// FieldEncryptionEnabled indicates an expected call of FieldEncryptionEnabled.
+func (mr *MockStoreMockRecorder) FieldEncryptionEnabled() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FieldEncryptionEnabled", reflect.TypeOf((*MockStore)(nil).FieldEncryptionEnabled))
+}
+
 // GetAccount mocks base method.
 func (m *MockStore) GetAccount(ctx context.Context, accountID string) (*types3.Account, error) {
 	m.ctrl.T.Helper()
@@ -3061,6 +3075,21 @@ func (m *MockStore) GetTokenIDByHashedToken(ctx context.Context, secret string) 
 func (mr *MockStoreMockRecorder) GetTokenIDByHashedToken(ctx, secret any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTokenIDByHashedToken", reflect.TypeOf((*MockStore)(nil).GetTokenIDByHashedToken), ctx, secret)
+}
+
+// GetUserAgentNetworkCredentialStatuses mocks base method.
+func (m *MockStore) GetUserAgentNetworkCredentialStatuses(ctx context.Context, accountID, userID string) ([]*types.UserCredential, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetUserAgentNetworkCredentialStatuses", ctx, accountID, userID)
+	ret0, _ := ret[0].([]*types.UserCredential)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetUserAgentNetworkCredentialStatuses indicates an expected call of GetUserAgentNetworkCredentialStatuses.
+func (mr *MockStoreMockRecorder) GetUserAgentNetworkCredentialStatuses(ctx, accountID, userID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserAgentNetworkCredentialStatuses", reflect.TypeOf((*MockStore)(nil).GetUserAgentNetworkCredentialStatuses), ctx, accountID, userID)
 }
 
 // GetUserByPATID mocks base method.

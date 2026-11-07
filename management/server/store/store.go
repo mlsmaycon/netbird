@@ -291,6 +291,8 @@ type Store interface {
 
 	// SetFieldEncrypt sets the field encryptor for encrypting sensitive user data.
 	SetFieldEncrypt(enc *crypt.FieldEncrypt)
+	// FieldEncryptionEnabled reports whether a field encryptor is configured.
+	FieldEncryptionEnabled() bool
 	GetUserIDByPeerKey(ctx context.Context, lockStrength LockingStrength, peerKey string) (string, error)
 
 	CreateZone(ctx context.Context, zone *zones.Zone) error
@@ -399,6 +401,7 @@ type Store interface {
 	DeleteAgentNetworkProvider(ctx context.Context, accountID, providerID string) error
 	GetAgentNetworkUserCredential(ctx context.Context, accountID, userID, providerID string) (*agentNetworkTypes.UserCredential, error)
 	GetAccountAgentNetworkUserCredentialStatuses(ctx context.Context, accountID string) ([]*agentNetworkTypes.UserCredential, error)
+	GetUserAgentNetworkCredentialStatuses(ctx context.Context, accountID, userID string) ([]*agentNetworkTypes.UserCredential, error)
 	LinkAgentNetworkUserCredential(ctx context.Context, cred *agentNetworkTypes.UserCredential) error
 	CompareAndSwapAgentNetworkUserCredential(ctx context.Context, cred *agentNetworkTypes.UserCredential, expectedVersion int64) (bool, error)
 	DeleteAgentNetworkUserCredential(ctx context.Context, accountID, userID, providerID string) error

@@ -89,6 +89,9 @@ type Flow struct {
 	VerificationURI string
 	ExpiresAt       time.Time
 	Interval        time.Duration
+	// JustLinked is true only on the poll that stored the login, so the
+	// caller can record the event once.
+	JustLinked bool
 }
 
 // Header is one header the proxy injects upstream.
@@ -220,7 +223,9 @@ func (s *Service) PollLink(ctx context.Context, key Key, flowID string, entry ca
 		}
 	}()
 
-	return state.view(flowID, s.pollVendor(ctx, flowID, state, entry)), nil
+	flow := state.view(flowID, s.pollVendor(ctx, flowID, state, entry))
+	flow.JustLinked = flow.Status == FlowLinked
+	return flow, nil
 }
 
 func (s *Service) pollVendor(ctx context.Context, flowID string, state *flowState, entry catalog.Provider) FlowStatus {

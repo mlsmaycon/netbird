@@ -38,6 +38,48 @@ func (e AccessRestrictionsCrowdsecMode) Valid() bool {
 	}
 }
 
+// Defines values for AgentNetworkAgentConfigProviderCredentialKind.
+const (
+	AgentNetworkAgentConfigProviderCredentialKindGcpServiceAccount AgentNetworkAgentConfigProviderCredentialKind = "gcp_service_account"
+	AgentNetworkAgentConfigProviderCredentialKindStaticKey         AgentNetworkAgentConfigProviderCredentialKind = "static_key"
+	AgentNetworkAgentConfigProviderCredentialKindUserOauth         AgentNetworkAgentConfigProviderCredentialKind = "user_oauth"
+)
+
+// Valid indicates whether the value is a known member of the AgentNetworkAgentConfigProviderCredentialKind enum.
+func (e AgentNetworkAgentConfigProviderCredentialKind) Valid() bool {
+	switch e {
+	case AgentNetworkAgentConfigProviderCredentialKindGcpServiceAccount:
+		return true
+	case AgentNetworkAgentConfigProviderCredentialKindStaticKey:
+		return true
+	case AgentNetworkAgentConfigProviderCredentialKindUserOauth:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentNetworkCatalogProviderCredentialKind.
+const (
+	AgentNetworkCatalogProviderCredentialKindGcpServiceAccount AgentNetworkCatalogProviderCredentialKind = "gcp_service_account"
+	AgentNetworkCatalogProviderCredentialKindStaticKey         AgentNetworkCatalogProviderCredentialKind = "static_key"
+	AgentNetworkCatalogProviderCredentialKindUserOauth         AgentNetworkCatalogProviderCredentialKind = "user_oauth"
+)
+
+// Valid indicates whether the value is a known member of the AgentNetworkCatalogProviderCredentialKind enum.
+func (e AgentNetworkCatalogProviderCredentialKind) Valid() bool {
+	switch e {
+	case AgentNetworkCatalogProviderCredentialKindGcpServiceAccount:
+		return true
+	case AgentNetworkCatalogProviderCredentialKindStaticKey:
+		return true
+	case AgentNetworkCatalogProviderCredentialKindUserOauth:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentNetworkCatalogProviderKind.
 const (
 	AgentNetworkCatalogProviderKindCustom   AgentNetworkCatalogProviderKind = "custom"
@@ -53,6 +95,21 @@ func (e AgentNetworkCatalogProviderKind) Valid() bool {
 	case AgentNetworkCatalogProviderKindGateway:
 		return true
 	case AgentNetworkCatalogProviderKindProvider:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentNetworkCatalogSubscriptionLoginFlow.
+const (
+	AgentNetworkCatalogSubscriptionLoginFlowDevice AgentNetworkCatalogSubscriptionLoginFlow = "device"
+)
+
+// Valid indicates whether the value is a known member of the AgentNetworkCatalogSubscriptionLoginFlow enum.
+func (e AgentNetworkCatalogSubscriptionLoginFlow) Valid() bool {
+	switch e {
+	case AgentNetworkCatalogSubscriptionLoginFlowDevice:
 		return true
 	default:
 		return false
@@ -95,6 +152,69 @@ func (e AgentNetworkManagedProxyState) Valid() bool {
 	case AgentNetworkManagedProxyStateProvisioning:
 		return true
 	case AgentNetworkManagedProxyStateReady:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentNetworkProviderLinkFlowStatus.
+const (
+	AgentNetworkProviderLinkFlowStatusExpired AgentNetworkProviderLinkFlowStatus = "expired"
+	AgentNetworkProviderLinkFlowStatusFailed  AgentNetworkProviderLinkFlowStatus = "failed"
+	AgentNetworkProviderLinkFlowStatusLinked  AgentNetworkProviderLinkFlowStatus = "linked"
+	AgentNetworkProviderLinkFlowStatusPending AgentNetworkProviderLinkFlowStatus = "pending"
+)
+
+// Valid indicates whether the value is a known member of the AgentNetworkProviderLinkFlowStatus enum.
+func (e AgentNetworkProviderLinkFlowStatus) Valid() bool {
+	switch e {
+	case AgentNetworkProviderLinkFlowStatusExpired:
+		return true
+	case AgentNetworkProviderLinkFlowStatusFailed:
+		return true
+	case AgentNetworkProviderLinkFlowStatusLinked:
+		return true
+	case AgentNetworkProviderLinkFlowStatusPending:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentNetworkProviderUserLinkStatus.
+const (
+	AgentNetworkProviderUserLinkStatusLinked      AgentNetworkProviderUserLinkStatus = "linked"
+	AgentNetworkProviderUserLinkStatusNeedsRelink AgentNetworkProviderUserLinkStatus = "needs_relink"
+)
+
+// Valid indicates whether the value is a known member of the AgentNetworkProviderUserLinkStatus enum.
+func (e AgentNetworkProviderUserLinkStatus) Valid() bool {
+	switch e {
+	case AgentNetworkProviderUserLinkStatusLinked:
+		return true
+	case AgentNetworkProviderUserLinkStatusNeedsRelink:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentNetworkSubscriptionLinkStatus.
+const (
+	AgentNetworkSubscriptionLinkStatusLinked      AgentNetworkSubscriptionLinkStatus = "linked"
+	AgentNetworkSubscriptionLinkStatusNeedsRelink AgentNetworkSubscriptionLinkStatus = "needs_relink"
+	AgentNetworkSubscriptionLinkStatusNotLinked   AgentNetworkSubscriptionLinkStatus = "not_linked"
+)
+
+// Valid indicates whether the value is a known member of the AgentNetworkSubscriptionLinkStatus enum.
+func (e AgentNetworkSubscriptionLinkStatus) Valid() bool {
+	switch e {
+	case AgentNetworkSubscriptionLinkStatusLinked:
+		return true
+	case AgentNetworkSubscriptionLinkStatusNeedsRelink:
+		return true
+	case AgentNetworkSubscriptionLinkStatusNotLinked:
 		return true
 	default:
 		return false
@@ -1939,12 +2059,24 @@ type AgentNetworkAgentConfigProvider struct {
 	// CatalogId Catalog entry id naming the provider type.
 	CatalogId string `json:"catalog_id"`
 
+	// CredentialKind Where the upstream credential comes from; see AgentNetworkCatalogProvider.credential_kind.
+	CredentialKind AgentNetworkAgentConfigProviderCredentialKind `json:"credential_kind"`
+
+	// Id Provider record id, used by the subscription link endpoints.
+	Id string `json:"id"`
+
 	// Models The effective model allowlist for the caller (or the declared/catalog models when all_models_allowed is true).
 	Models []string `json:"models"`
 
 	// Name Operator-assigned provider label.
 	Name string `json:"name"`
+
+	// SubscriptionLink The caller's own link state for a user_oauth provider. Never carries tokens.
+	SubscriptionLink *AgentNetworkSubscriptionLink `json:"subscription_link,omitempty"`
 }
+
+// AgentNetworkAgentConfigProviderCredentialKind Where the upstream credential comes from; see AgentNetworkCatalogProvider.credential_kind.
+type AgentNetworkAgentConfigProviderCredentialKind string
 
 // AgentNetworkBudgetRule Account-level budget rule. A limit-only rule bound to groups and/or users that applies across all policies as a min-wins ceiling. Empty targets means it applies to every caller.
 type AgentNetworkBudgetRule struct {
@@ -2065,6 +2197,12 @@ type AgentNetworkCatalogProvider struct {
 	// BrandColor Hex brand color used to render the provider badge in the dashboard.
 	BrandColor string `json:"brand_color"`
 
+	// CredentialKind Where the upstream credential comes from.
+	// "static_key" — the operator's api_key, sent as is.
+	// "gcp_service_account" — a static bearer, or a "keyfile::<base64 service-account JSON>" api_key the proxy mints Google tokens from.
+	// "user_oauth" — no operator key: each user links their own subscription login, see subscription_login.
+	CredentialKind AgentNetworkCatalogProviderCredentialKind `json:"credential_kind"`
+
 	// DefaultContentType Default Content-Type for upstream requests.
 	DefaultContentType string `json:"default_content_type"`
 
@@ -2097,13 +2235,34 @@ type AgentNetworkCatalogProvider struct {
 
 	// PricingSurfaces Cost-meter pricing surfaces this provider's traffic is metered under ("openai", "anthropic", "bedrock"). Tells the dashboard which cache-rate fields apply to this provider's models: "openai" → cached_input_per_1k (cached prompt tokens are a subset of input); "anthropic"/"bedrock" → cache_read_per_1k + cache_creation_per_1k (additive buckets). Absent/empty for gateway and custom entries, whose upstream shape NetBird cannot know ahead of time — surface all cache fields for those.
 	PricingSurfaces *[]string `json:"pricing_surfaces,omitempty"`
+
+	// SubscriptionLogin How users link their own subscription for a user_oauth catalog entry.
+	SubscriptionLogin *AgentNetworkCatalogSubscriptionLogin `json:"subscription_login,omitempty"`
 }
+
+// AgentNetworkCatalogProviderCredentialKind Where the upstream credential comes from.
+// "static_key" — the operator's api_key, sent as is.
+// "gcp_service_account" — a static bearer, or a "keyfile::<base64 service-account JSON>" api_key the proxy mints Google tokens from.
+// "user_oauth" — no operator key: each user links their own subscription login, see subscription_login.
+type AgentNetworkCatalogProviderCredentialKind string
 
 // AgentNetworkCatalogProviderKind Presentation grouping for the provider Select on the dashboard.
 // "provider" — first-party vendor API (OpenAI, Anthropic, …); the upstream is the model itself.
 // "gateway" — routing/aggregation layer in front of multiple providers (LiteLLM, Portkey, …); typically pairs with NetBird identity stamping.
 // "custom" — generic OpenAI-compatible self-hosted endpoint catch-all.
 type AgentNetworkCatalogProviderKind string
+
+// AgentNetworkCatalogSubscriptionLogin How users link their own subscription for a user_oauth catalog entry.
+type AgentNetworkCatalogSubscriptionLogin struct {
+	// Flow "device" — the user enters a short code on the vendor's page (verification_uri) and the dashboard polls until they approve.
+	Flow AgentNetworkCatalogSubscriptionLoginFlow `json:"flow"`
+
+	// VerificationUri The vendor page where the user enters their code.
+	VerificationUri string `json:"verification_uri"`
+}
+
+// AgentNetworkCatalogSubscriptionLoginFlow "device" — the user enters a short code on the vendor's page (verification_uri) and the dashboard polls until they approve.
+type AgentNetworkCatalogSubscriptionLoginFlow string
 
 // AgentNetworkConsumption One per-(dimension, window) consumption counter row. The proxy ticks one row per dimension on every served LLM request; the dashboard reads this listing to surface live counter growth.
 type AgentNetworkConsumption struct {
@@ -2393,6 +2552,36 @@ type AgentNetworkProvider struct {
 	UpstreamUrl string `json:"upstream_url"`
 }
 
+// AgentNetworkProviderLinkFlow A subscription login in progress. Show user_code and verification_uri to the user, then poll until status leaves "pending".
+type AgentNetworkProviderLinkFlow struct {
+	// ExpiresAt When user_code stops being accepted.
+	ExpiresAt time.Time `json:"expires_at"`
+
+	// Id Flow identifier for polling. Bound to the caller who started it.
+	Id string `json:"id"`
+
+	// IntervalSeconds The shortest useful polling interval. Polling faster does no harm but returns the same answer.
+	IntervalSeconds int `json:"interval_seconds"`
+
+	// Status "pending" — waiting for the user to approve on the vendor's page.
+	// "linked" — the login is stored; the flow is finished.
+	// "expired" — the code expired before approval; start a new flow.
+	// "failed" — the vendor refused the login; start a new flow.
+	Status AgentNetworkProviderLinkFlowStatus `json:"status"`
+
+	// UserCode The code the user enters on the vendor's page.
+	UserCode string `json:"user_code"`
+
+	// VerificationUri The vendor page where the user enters user_code.
+	VerificationUri string `json:"verification_uri"`
+}
+
+// AgentNetworkProviderLinkFlowStatus "pending" — waiting for the user to approve on the vendor's page.
+// "linked" — the login is stored; the flow is finished.
+// "expired" — the code expired before approval; start a new flow.
+// "failed" — the vendor refused the login; start a new flow.
+type AgentNetworkProviderLinkFlowStatus string
+
 // AgentNetworkProviderModel A model exposed by the provider, with the operator's per-1k input/output prices in USD.
 type AgentNetworkProviderModel struct {
 	// CacheCreationPer1k Anthropic-shape cache rate — cost per 1k cache-creation tokens (additive to input tokens), in USD. Omitted means inherit NetBird's default rate for this model when one exists; 0 means cache writes bill at input_per_1k.
@@ -2416,7 +2605,7 @@ type AgentNetworkProviderModel struct {
 
 // AgentNetworkProviderRequest defines model for AgentNetworkProviderRequest.
 type AgentNetworkProviderRequest struct {
-	// ApiKey Upstream provider API key. Sealed at rest on the management server and never returned in responses. Required on create; optional on update (omit to keep the existing key).
+	// ApiKey Upstream provider API key. Sealed at rest on the management server and never returned in responses. Required on create for every catalog entry whose credential_kind is not user_oauth; optional on update (omit to keep the existing key). Ignored for user_oauth entries, where each user links their own login instead.
 	ApiKey *string `json:"api_key,omitempty"`
 
 	// Enabled Whether the provider is enabled. Defaults to true on create.
@@ -2449,6 +2638,27 @@ type AgentNetworkProviderRequest struct {
 	// UpstreamUrl Full upstream URL (with scheme) that NetBird forwards traffic to.
 	UpstreamUrl string `json:"upstream_url"`
 }
+
+// AgentNetworkProviderUserLink One user's link state for a user_oauth provider, for administrators. Never carries tokens.
+type AgentNetworkProviderUserLink struct {
+	// LastRefreshedAt When management last refreshed the login's access token.
+	LastRefreshedAt *time.Time `json:"last_refreshed_at,omitempty"`
+
+	// LinkedAt When the login was linked.
+	LinkedAt time.Time `json:"linked_at"`
+
+	// PlanType The vendor plan reported for the login, when known.
+	PlanType *string `json:"plan_type,omitempty"`
+
+	// Status Whether the login can still be refreshed.
+	Status AgentNetworkProviderUserLinkStatus `json:"status"`
+
+	// UserId The user who linked the login.
+	UserId string `json:"user_id"`
+}
+
+// AgentNetworkProviderUserLinkStatus Whether the login can still be refreshed.
+type AgentNetworkProviderUserLinkStatus string
 
 // AgentNetworkSettings Per-account Agent Network gateway settings. One row per account; endpoint and proxy_address are assigned at bootstrap (POST) and immutable thereafter. Before bootstrap the account reads as the default values with empty endpoint and proxy_address.
 type AgentNetworkSettings struct {
@@ -2521,6 +2731,25 @@ type AgentNetworkSettingsRequest struct {
 	// RedactPii Whether captured prompts have PII redacted.
 	RedactPii bool `json:"redact_pii"`
 }
+
+// AgentNetworkSubscriptionLink The caller's own link state for a user_oauth provider. Never carries tokens.
+type AgentNetworkSubscriptionLink struct {
+	// LinkedAt When the current login was linked.
+	LinkedAt *time.Time `json:"linked_at,omitempty"`
+
+	// PlanType The vendor plan reported at link or refresh time, when known.
+	PlanType *string `json:"plan_type,omitempty"`
+
+	// Status "linked" — requests go out under the caller's subscription.
+	// "not_linked" — the caller has not linked a login; requests are refused until they do.
+	// "needs_relink" — the vendor refused to refresh the login; the caller must link again.
+	Status AgentNetworkSubscriptionLinkStatus `json:"status"`
+}
+
+// AgentNetworkSubscriptionLinkStatus "linked" — requests go out under the caller's subscription.
+// "not_linked" — the caller has not linked a login; requests are refused until they do.
+// "needs_relink" — the vendor refused to refresh the login; the caller must link again.
+type AgentNetworkSubscriptionLinkStatus string
 
 // AgentNetworkUsageBucket One aggregated agent-network usage time bucket (UTC). The bucket width is set by the request's granularity.
 type AgentNetworkUsageBucket struct {
