@@ -487,6 +487,12 @@ func applyUpstreamHeaders(r *http.Request, rewrite *middleware.UpstreamRewrite) 
 	if rewrite.AuthHeader != nil && rewrite.AuthHeader.Name != "" {
 		r.Header.Set(rewrite.AuthHeader.Name, rewrite.AuthHeader.Value)
 	}
+	for _, h := range rewrite.ExtraAuthHeaders {
+		if h.Name == "" {
+			continue
+		}
+		r.Header.Set(h.Name, h.Value)
+	}
 }
 
 // resolveChain returns a chain only from the target's routing revision.

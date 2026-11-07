@@ -22,11 +22,6 @@ import (
 // decrypted API key in catalog AuthHeaderTemplate strings.
 const apiKeyPlaceholder = "${API_KEY}" //nolint:gosec // template marker, not a credential
 
-// gcpKeyfilePrefix marks an api_key that holds a base64-encoded GCP
-// service-account JSON key ("keyfile::<base64>") rather than a static bearer
-// token; the proxy mints OAuth tokens from it. Mirrors Aperture's convention.
-const gcpKeyfilePrefix = "keyfile::"
-
 // SynthesizedServiceIDPrefix prefixes the in-memory ID of every
 // reverse-proxy service synthesised from Agent Network state. One
 // synthesised service exists per (account, cluster); the suffix is the
@@ -1100,8 +1095,8 @@ func providerAuthHeader(p *types.Provider) (name, value, gcpSAKeyB64 string, err
 	// static bearer. The proxy mints + refreshes a short-lived OAuth token from
 	// it at request time, so carry the key material on the route and emit no
 	// static value.
-	if rest, isKeyfile := strings.CutPrefix(p.APIKey, gcpKeyfilePrefix); isKeyfile {
-		return entry.AuthHeaderName, "", strings.TrimSpace(rest), nil
+	if saKey, isKeyfile := catalog.GCPServiceAccountKey(p.APIKey); isKeyfile {
+		return entry.AuthHeaderName, "", saKey, nil
 	}
 	value = strings.ReplaceAll(entry.AuthHeaderTemplate, apiKeyPlaceholder, p.APIKey)
 	return entry.AuthHeaderName, value, "", nil

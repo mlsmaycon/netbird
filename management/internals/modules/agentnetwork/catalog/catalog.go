@@ -4,7 +4,12 @@
 // providers (and their models) to the dashboard.
 package catalog
 
-import "github.com/netbirdio/netbird/shared/management/http/api"
+import (
+	"strings"
+	"time"
+
+	"github.com/netbirdio/netbird/shared/management/http/api"
+)
 
 // Model is the in-memory representation of a catalog model.
 //
@@ -122,6 +127,118 @@ type Provider struct {
 	// provider form can offer a live list instead of only the hand-curated
 	// Models above. Nil entries keep free-text entry.
 	Discovery *Discovery
+	// CredentialKind says where the upstream credential comes from. The zero
+	// value means CredentialStaticKey; use EffectiveCredentialKind to read it.
+	CredentialKind CredentialKind
+	// OAuth is the subscription-login profile of a CredentialUserOAuth entry.
+	// It lives only in this built-in catalog: an operator cannot supply an
+	// issuer or client id, so management only ever talks to vendors whose
+	// terms permit NetBird to hold their users' logins.
+	OAuth *OAuthProfile
+}
+
+// CredentialKind names how the proxy obtains the credential it injects on
+// requests to a provider.
+type CredentialKind string
+
+const (
+	// CredentialStaticKey is an operator-supplied api_key substituted into
+	// AuthHeaderTemplate verbatim.
+	CredentialStaticKey CredentialKind = "static_key"
+	// CredentialGCPServiceAccount accepts either a static bearer or a
+	// "keyfile::<base64 service-account JSON>" api_key, from which the proxy
+	// mints short-lived Google OAuth tokens.
+	CredentialGCPServiceAccount CredentialKind = "gcp_service_account" //nolint:gosec // kind label, not a credential
+	// CredentialUserOAuth carries no operator credential: every user links
+	// their own subscription login, which management holds and refreshes, and
+	// the proxy fetches that user's short-lived access token per request.
+	CredentialUserOAuth CredentialKind = "user_oauth" //nolint:gosec // kind label, not a credential
+)
+
+// GCPKeyfilePrefix marks an api_key holding a base64-encoded GCP
+// service-account JSON key rather than a static bearer token.
+const GCPKeyfilePrefix = "keyfile::"
+
+// GCPServiceAccountKey returns the base64 service-account key carried by a
+// "keyfile::" api_key, and false for any other value.
+//
+// It is honoured for every static-key kind, not only Vertex, because records
+// that front Vertex through a custom or gateway entry already depend on it.
+func GCPServiceAccountKey(apiKey string) (string, bool) {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(apiKey), GCPKeyfilePrefix)
+	if !ok {
+		return "", false
+	}
+	return strings.TrimSpace(rest), true
+}
+
+// EffectiveCredentialKind returns the entry's credential kind, defaulting an
+// unset one to CredentialStaticKey.
+func (p Provider) EffectiveCredentialKind() CredentialKind {
+	if p.CredentialKind == "" {
+		return CredentialStaticKey
+	}
+	return p.CredentialKind
+}
+
+// UsesUserOAuth reports whether each user links their own login for this
+// entry instead of the operator supplying an api_key.
+func (p Provider) UsesUserOAuth() bool {
+	return p.EffectiveCredentialKind() == CredentialUserOAuth && p.OAuth != nil
+}
+
+// OAuthFlow names how a user completes a subscription login.
+type OAuthFlow string
+
+const (
+	// OAuthFlowDevice is a device-code login completed server-side:
+	// management requests a user code, the user enters it on the vendor's
+	// page, and management polls for the result. It is the only flow a
+	// public client id restricted to loopback redirects can use from a
+	// server.
+	OAuthFlowDevice OAuthFlow = "device"
+)
+
+// OAuthProfile describes one vendor's subscription login and how its tokens
+// are presented upstream. Endpoints are absolute URLs so tests can point a
+// copy of the profile at a fake issuer.
+type OAuthProfile struct {
+	// Issuer is the authorization server, e.g. https://auth.openai.com.
+	Issuer   string
+	ClientID string
+	Flow     OAuthFlow
+	// Scopes are requested by redirect flows. The device flow sends none: the
+	// vendor binds them to the client id.
+	Scopes []string
+
+	// DeviceCodeURL issues a user code, DeviceTokenURL is polled until the
+	// user approves, and VerificationURI is where the user enters the code.
+	DeviceCodeURL   string
+	DeviceTokenURL  string
+	VerificationURI string
+	// DeviceRedirectURI is the redirect_uri the code exchange must quote for
+	// a code obtained through the device flow.
+	DeviceRedirectURI string
+	// DeviceCodeTTL is how long a user code stays valid.
+	DeviceCodeTTL time.Duration
+	// TokenURL serves both the code exchange and refresh grants.
+	TokenURL string
+
+	// ClaimsNamespace is the id_token claim holding the vendor account
+	// object; the *Claim fields name keys inside it.
+	ClaimsNamespace string
+	AccountIDClaim  string
+	PlanTypeClaim   string
+	FedRAMPClaim    string
+
+	// AccountIDHeader carries the vendor account id on upstream requests,
+	// and FedRAMPHeader is set to "true" for FedRAMP accounts.
+	AccountIDHeader string
+	FedRAMPHeader   string
+	// RequestPathPrefix is the request path this vendor's clients use. The
+	// router keeps requests under it on routes of this entry and keeps every
+	// other request off them, because the two upstreams serve different APIs.
+	RequestPathPrefix string
 }
 
 // ListingShape names the response envelope a vendor returns its model
@@ -157,10 +274,10 @@ const (
 // one from the caller is also what keeps this from being an open proxy: the
 // only hosts management will dial are the ones written here.
 type Discovery struct {
-	Host            string
-	Path            string
-	Query           string
-	Shape           ListingShape
+	Host  string
+	Path  string
+	Query string
+	Shape ListingShape
 	// ExactModelsOnly omits wildcard patterns from listings when NetBird's
 	// provider model rows cannot represent the vendor's matching semantics.
 	ExactModelsOnly bool
@@ -480,6 +597,7 @@ var providers = []Provider{
 		Name:               "Google Vertex AI API",
 		Description:        "Anthropic Claude models hosted on Vertex AI",
 		DefaultHost:        "<region>-aiplatform.googleapis.com",
+		CredentialKind:     CredentialGCPServiceAccount,
 		AuthHeaderName:     "Authorization",
 		AuthHeaderTemplate: "Bearer ${API_KEY}",
 		DefaultContentType: "application/json",

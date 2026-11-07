@@ -84,3 +84,27 @@ func TestAgentgatewayCatalogAPIResponse(t *testing.T) {
 	assert.Equal(t, "x-netbird-user-id", resp.IdentityInjection.HeaderPair.EndUserIdHeader)
 	assert.Equal(t, "x-netbird-groups", resp.IdentityInjection.HeaderPair.TagsHeader)
 }
+
+func TestCredentialKindDefaults(t *testing.T) {
+	openai, ok := Lookup("openai_api")
+	require.True(t, ok)
+	assert.Equal(t, CredentialStaticKey, openai.EffectiveCredentialKind(), "an unset kind should read as a static key")
+	assert.False(t, openai.UsesUserOAuth())
+
+	vertex, ok := Lookup("vertex_ai_api")
+	require.True(t, ok)
+	assert.Equal(t, CredentialGCPServiceAccount, vertex.EffectiveCredentialKind(), "vertex should accept service-account keys")
+
+	// A user_oauth kind without a profile has nothing to log in against, so
+	// it must not be treated as a linkable entry.
+	assert.False(t, Provider{CredentialKind: CredentialUserOAuth}.UsesUserOAuth(), "user_oauth without a profile should not be linkable")
+}
+
+func TestGCPServiceAccountKey(t *testing.T) {
+	key, ok := GCPServiceAccountKey("  keyfile:: abc== ")
+	assert.True(t, ok)
+	assert.Equal(t, "abc==", key, "key material should be trimmed")
+
+	_, ok = GCPServiceAccountKey("sk-plain")
+	assert.False(t, ok, "a plain bearer is not a service-account key")
+}

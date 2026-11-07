@@ -46,9 +46,6 @@ const (
 	// gcpScope matches the scope llm_router mints Vertex tokens under, so a
 	// credential that works for discovery works for inference too.
 	gcpScope = "https://www.googleapis.com/auth/cloud-platform"
-	// vertexKeyfilePrefix marks an api_key that is a base64 service-account
-	// JSON key rather than a bearer token.
-	vertexKeyfilePrefix = "keyfile::"
 )
 
 // ErrNoDiscovery is returned for a catalog entry that declares no listing
@@ -347,7 +344,7 @@ func applyAuth(req *http.Request, entry catalog.Provider, apiKey string) error {
 	if key == "" {
 		return fmt.Errorf("%w: %s discovery needs an API key", ErrInvalidRequest, entry.Name)
 	}
-	if rest, ok := strings.CutPrefix(key, vertexKeyfilePrefix); ok {
+	if rest, ok := catalog.GCPServiceAccountKey(key); ok {
 		token, err := mintGCPToken(req.Context(), rest)
 		if err != nil {
 			return err
