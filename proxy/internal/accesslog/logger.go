@@ -236,6 +236,7 @@ var usageMetadataKeys = map[string]struct{}{
 	"cost.usd_total":            {},
 	"cost.usd_cache":            {},
 	"llm.authorising_groups":    {},
+	"llm.billing_mode":          {},
 }
 
 // stripAgentNetworkEntryForUsage returns the entry reduced to what's needed to

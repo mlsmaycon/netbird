@@ -62,6 +62,7 @@ func TestMiddlewareIdentity(t *testing.T) {
 			middleware.KeyLLMResolvedProviderID,
 			middleware.KeyLLMAuthorisingGroups,
 			middleware.KeyLLMNonInference,
+			middleware.KeyLLMBillingMode,
 			middleware.KeyLLMModel,
 			middleware.KeyLLMPolicyDecision,
 			middleware.KeyLLMPolicyReason,

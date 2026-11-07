@@ -23,13 +23,16 @@ type OpenAIParser struct{}
 // serves at this path, so false-positive risk is negligible.
 // `/completions` (legacy), `/embeddings`, and `/responses` are
 // kept on the canonical-only path because their bare forms are
-// too generic to be safe substrings.
+// too generic to be safe substrings. Codex on a ChatGPT plan sends
+// the Responses API to `/backend-api/codex/responses`, which is
+// specific enough to list whole.
 var openAIPathHints = []string{
 	"/v1/chat/completions",
 	"/v1/completions",
 	"/v1/embeddings",
 	"/v1/responses",
 	"/chat/completions",
+	"/backend-api/codex/responses",
 }
 
 // Provider returns ProviderOpenAI.

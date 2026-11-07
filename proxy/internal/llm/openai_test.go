@@ -18,6 +18,8 @@ func TestOpenAIDetectFromURL(t *testing.T) {
 		"/v1/completions":                       true,
 		"/v1/embeddings":                        true,
 		"/v1/responses":                         true,
+		"/backend-api/codex/responses":          true,
+		"/backend-api/codex/models":             false,
 		"/API/V1/Chat/Completions":              true,
 		"/upstream/v1/chat/completions?trace=1": true,
 		// Cloudflare AI Gateway puts its own /v1/{account}/{gateway}
@@ -27,12 +29,12 @@ func TestOpenAIDetectFromURL(t *testing.T) {
 		// catches Cloudflare's OpenAI direct path
 		// (/v1/{account}/{gateway}/openai/chat/completions) and
 		// compat path (/v1/{account}/{gateway}/compat/chat/completions).
-		"/v1/{account}/{gateway}/openai/chat/completions":  true,
-		"/v1/{account}/{gateway}/compat/chat/completions":  true,
-		"/chat/completions":                                true,
-		"/v1/messages":                                     false,
-		"/healthz":                                         false,
-		"":                                                 false,
+		"/v1/{account}/{gateway}/openai/chat/completions": true,
+		"/v1/{account}/{gateway}/compat/chat/completions": true,
+		"/chat/completions": true,
+		"/v1/messages":      false,
+		"/healthz":          false,
+		"":                  false,
 	}
 	for path, want := range cases {
 		assert.Equal(t, want, p.DetectFromURL(path), "DetectFromURL(%q)", path)

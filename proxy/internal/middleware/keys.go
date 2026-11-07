@@ -83,6 +83,12 @@ const (
 	// read as an undetermined one. Never derived from client input.
 	KeyLLMNonInference = "llm.non_inference"
 
+	// LLM billing mode (emitted by llm_router). "subscription" marks a request
+	// served on the caller's own vendor subscription rather than a metered API
+	// key: tokens are still recorded, but cost_meter does not price them at
+	// API rates. Absent means metered. Never derived from client input.
+	KeyLLMBillingMode = "llm.billing_mode"
+
 	// LLM policy attribution (emitted by llm_limit_check on the allow
 	// path). Names the policy that paid for this request and the
 	// dimension counters the post-flight llm_limit_record middleware

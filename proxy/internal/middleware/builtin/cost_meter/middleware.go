@@ -34,6 +34,9 @@ const (
 	skipUnparseableTokens = "unparseable_tokens"
 	skipZeroTokens        = "zero_tokens"
 	skipUnknownModel      = "unknown_model"
+	// skipSubscription marks a request served on the caller's own vendor
+	// subscription: its tokens are billed to that plan, not at API rates.
+	skipSubscription = "subscription"
 )
 
 var metadataKeys = []string{
@@ -96,6 +99,11 @@ func (m *Middleware) Close() error { return nil }
 func (m *Middleware) Invoke(_ context.Context, in *middleware.Input) (*middleware.Output, error) {
 	out := &middleware.Output{Decision: middleware.DecisionAllow}
 	if in == nil {
+		return out, nil
+	}
+
+	if lookupKV(in.Metadata, middleware.KeyLLMBillingMode) == "subscription" {
+		out.Metadata = skip(skipSubscription)
 		return out, nil
 	}
 

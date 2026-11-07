@@ -584,3 +584,26 @@ func TestMiddleware_CloseNilSafe(t *testing.T) {
 	var m *Middleware
 	require.NoError(t, m.Close(), "nil-receiver Close must be safe")
 }
+
+// A request served on the caller's own subscription is billed to that plan,
+// so it must not be priced at API rates even for a model the table knows.
+func TestInvoke_SubscriptionIsNotPriced(t *testing.T) {
+	mw := buildMiddleware(t, fixtureConfig(t))
+
+	out, err := mw.Invoke(context.Background(), &middleware.Input{
+		Metadata: []middleware.KV{
+			{Key: middleware.KeyLLMProvider, Value: "openai"},
+			{Key: middleware.KeyLLMModel, Value: "gpt-4o-mini"},
+			{Key: middleware.KeyLLMInputTokens, Value: "1000"},
+			{Key: middleware.KeyLLMOutputTokens, Value: "1000"},
+			{Key: middleware.KeyLLMBillingMode, Value: "subscription"},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, middleware.DecisionAllow, out.Decision)
+	value, ok := metaValue(t, out.Metadata, middleware.KeyCostSkipped)
+	require.True(t, ok, "subscription traffic should be marked as skipped")
+	assert.Equal(t, skipSubscription, value)
+	_, priced := metaValue(t, out.Metadata, middleware.KeyCostUSDTotal)
+	assert.False(t, priced, "no cost should be emitted for subscription traffic")
+}

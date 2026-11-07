@@ -30,6 +30,10 @@ func (f *fakeMgmt) RecordLLMUsage(_ context.Context, _ *proto.RecordLLMUsageRequ
 	return &proto.RecordLLMUsageResponse{}, nil
 }
 
+func (f *fakeMgmt) GetLLMUserCredential(_ context.Context, _ *proto.GetLLMUserCredentialRequest, _ ...grpc.CallOption) (*proto.GetLLMUserCredentialResponse, error) {
+	return &proto.GetLLMUserCredentialResponse{Status: proto.GetLLMUserCredentialResponse_NOT_LINKED}, nil
+}
+
 func runInvoke(t *testing.T, m *Middleware, in *middleware.Input) *middleware.Output {
 	t.Helper()
 	out, err := m.Invoke(context.Background(), in)

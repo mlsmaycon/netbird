@@ -68,12 +68,19 @@ var strippedAuthHeaders = []string{
 	"X-Amz-Date",          // AWS SigV4 — strip client-supplied AWS signing material
 	"X-Amz-Security-Token",
 	"X-Amz-Content-Sha256",
+	"chatgpt-account-id", // ChatGPT: which account a subscription token acts for
+	"X-OpenAI-Fedramp",
 }
 
 // Middleware routes requests to upstream LLM providers based on the
 // llm.model metadata emitted by llm_request_parser.
 type Middleware struct {
 	cfg Config
+	// userRoutes are the routes served with the caller's own credential and
+	// selected by request path; cfg.Providers holds the rest.
+	userRoutes []ProviderRoute
+	credClient CredentialClient
+	creds      *credentialCache
 	// tokenSrc caches one auto-refreshing OAuth2 TokenSource per GCP
 	// service-account key (keyed by a hash of the key material), so Vertex
 	// token minting happens once and refreshes are amortised across requests.
@@ -85,7 +92,29 @@ type Middleware struct {
 // or nil Providers slice yields a router that denies every request as
 // not-routable.
 func New(cfg Config) *Middleware {
-	return &Middleware{cfg: cfg, tokenSrc: map[string]oauth2.TokenSource{}}
+	return newWithCredentials(cfg, nil, sharedCredentials)
+}
+
+// newWithCredentials builds a router that can serve user_oauth routes through
+// client. A nil client makes every such route deny.
+func newWithCredentials(cfg Config, client CredentialClient, creds *credentialCache) *Middleware {
+	general := make([]ProviderRoute, 0, len(cfg.Providers))
+	var user []ProviderRoute
+	for _, r := range cfg.Providers {
+		if isUserCredentialRoute(r) {
+			user = append(user, r)
+			continue
+		}
+		general = append(general, r)
+	}
+	cfg.Providers = general
+	return &Middleware{
+		cfg:        cfg,
+		userRoutes: user,
+		credClient: client,
+		creds:      creds,
+		tokenSrc:   map[string]oauth2.TokenSource{},
+	}
 }
 
 // ID returns the registry identifier.
@@ -110,6 +139,7 @@ func (m *Middleware) MetadataKeys() []string {
 		middleware.KeyLLMPolicyDecision,
 		middleware.KeyLLMPolicyReason,
 		middleware.KeyLLMNonInference,
+		middleware.KeyLLMBillingMode,
 		// Emitted only for the per-model lookup, whose model lives in the path
 		// rather than a body the parser could read.
 		middleware.KeyLLMModel,
@@ -140,12 +170,18 @@ const (
 // auth header. Unknown models deny with model_not_routable; models
 // known to a provider that no policy authorises for the caller deny
 // with no_authorised_provider.
-func (m *Middleware) Invoke(_ context.Context, in *middleware.Input) (*middleware.Output, error) {
+func (m *Middleware) Invoke(ctx context.Context, in *middleware.Input) (*middleware.Output, error) {
 	reqPath := requestPath(in.URL)
 	// The caller's API dialect, used to mirror a denial in the vendor's own
 	// error shape so the client can explain it to the user.
 	surface, _ := lookupMetadata(in.Metadata, middleware.KeyLLMProvider)
 	model, _ := lookupMetadata(in.Metadata, middleware.KeyLLMModel)
+
+	// A subscription vendor's clients use their own path. Requests under it
+	// are served only by those routes, with the caller's own credential.
+	if routes := m.userCredentialRoutesFor(reqPath); len(routes) > 0 {
+		return m.routeUserCredential(ctx, in, routes, reqPath, surface, model), nil
+	}
 
 	// Vertex AI carries the model in the URL path, not the body, and is
 	// selected by path rather than by the model/vendor table. Route it before
@@ -425,8 +461,13 @@ func stripBedrockNamespace(out *middleware.Output) {
 //     UpstreamPath is the catchall. If none prefix-matches, fall back
 //     to declaration order so the model stays routable.
 func (m *Middleware) matchRoute(model, vendor, reqPath string, userGroups []string) (ProviderRoute, matchOutcome) {
+	return matchRouteIn(m.cfg.Providers, model, vendor, reqPath, userGroups)
+}
+
+// matchRouteIn is matchRoute over an explicit route set.
+func matchRouteIn(routes []ProviderRoute, model, vendor, reqPath string, userGroups []string) (ProviderRoute, matchOutcome) {
 	var modelMatched []ProviderRoute
-	for _, route := range m.cfg.Providers {
+	for _, route := range routes {
 		if routeClaimsModel(route, model) {
 			modelMatched = append(modelMatched, route)
 		}

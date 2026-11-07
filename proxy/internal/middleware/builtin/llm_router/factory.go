@@ -79,6 +79,14 @@ type ProviderRoute struct {
 	// this route's upstream. For self-hosted / internal gateways behind a
 	// private or self-signed certificate.
 	SkipTLSVerify bool `json:"skip_tls_verify,omitempty"`
+	// UserCredential marks a route served with the caller's own subscription
+	// login. The route carries no credential: the router fetches the caller's
+	// headers from management per request and denies when there are none.
+	UserCredential bool `json:"user_credential,omitempty"`
+	// RequestPathPrefix is the request path the route's clients use. Requests
+	// under it are served only by such routes, and these routes serve nothing
+	// else. A user-credential route without one is unreachable.
+	RequestPathPrefix string `json:"request_path_prefix,omitempty"`
 }
 
 // ModelPolicyRule is one authorising policy's contribution to what a caller
@@ -118,7 +126,11 @@ func (Factory) New(rawConfig []byte) (middleware.Middleware, error) {
 			return nil, fmt.Errorf("decode config: %w", err)
 		}
 	}
-	return New(cfg), nil
+	var client CredentialClient
+	if mgmt := builtin.Context().MgmtClient; mgmt != nil {
+		client = mgmt
+	}
+	return newWithCredentials(cfg, client, sharedCredentials), nil
 }
 
 // isEmptyJSON reports whether the payload is whitespace, null, or an
