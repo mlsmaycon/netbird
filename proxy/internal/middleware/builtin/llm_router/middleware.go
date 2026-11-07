@@ -235,6 +235,11 @@ func (m *Middleware) Invoke(ctx context.Context, in *middleware.Input) (*middlew
 	}
 
 	route, outcome := m.matchRoute(model, surface, reqPath, in.UserGroups)
+	if outcome == matchOutcomeUnknownModel {
+		if prefix := m.linkedPathFor(model, surface, in.UserGroups); prefix != "" {
+			return denyOnlyOnLinkedPath(surface, model, prefix), nil
+		}
+	}
 	return m.decide(route, outcome, surface, model, in.UserGroups, nil), nil
 }
 

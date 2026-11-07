@@ -270,3 +270,33 @@ func TestLinkedCredential_ConcurrentLookupsCollapse(t *testing.T) {
 	wg.Wait()
 	assert.LessOrEqual(t, client.calls.Load(), int32(2), "concurrent requests should share one management lookup")
 }
+
+// A model only a ChatGPT-login route serves, asked for on an API path, must
+// say where the provider is reachable instead of claiming no provider exists.
+func TestLinkedCredential_APIPathPointsAtCodexPath(t *testing.T) {
+	client := &fakeCredentialClient{status: proto.GetLLMProviderCredentialResponse_OK}
+	route := codexRoute()
+	route.Models = []string{"gpt-5.5"}
+	mw := newCodexRouter(client, route)
+
+	for _, path := range []string{"/v1/chat/completions", "/v1/responses"} {
+		out, err := mw.Invoke(context.Background(), codexInput("gpt-5.5", path))
+		require.NoError(t, err)
+		require.Equal(t, middleware.DecisionDeny, out.Decision, path)
+		assert.Equal(t, denyCodeNotRoutable, out.DenyReason.Code, "the code stays stable for clients")
+		assert.Contains(t, out.DenyReason.Message, "/backend-api/codex", "the message should point at the Codex path for %s", path)
+		assert.Equal(t, "/backend-api/codex", out.DenyReason.Details["path_prefix"])
+	}
+
+	// No hint for a caller the route does not authorise, or for a model the
+	// route does not serve.
+	in := codexInput("gpt-5.5", "/v1/chat/completions")
+	in.UserGroups = []string{"grp-other"}
+	out, err := mw.Invoke(context.Background(), in)
+	require.NoError(t, err)
+	assert.NotContains(t, out.DenyReason.Message, "/backend-api/codex")
+	out, err = mw.Invoke(context.Background(), codexInput("gpt-4o", "/v1/chat/completions"))
+	require.NoError(t, err)
+	assert.NotContains(t, out.DenyReason.Message, "/backend-api/codex")
+	assert.Zero(t, client.calls.Load(), "a hint never fetches the login")
+}

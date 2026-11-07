@@ -2,6 +2,7 @@ package llm_router
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -279,4 +280,33 @@ func denyCredential(surface string, failure credentialFailure) *middleware.Outpu
 			{Key: middleware.KeyLLMPolicyReason, Value: denyReasonCredentialNotLinked},
 		},
 	}
+}
+
+// linkedPathFor returns the request path prefix of a linked-login route that
+// would serve model for this caller, so a request on another path can be told
+// where the provider is reachable. Empty when no such route exists.
+func (m *Middleware) linkedPathFor(model, vendor string, userGroups []string) string {
+	for _, r := range m.linkedRoutes {
+		if r.RequestPathPrefix == "" || !routeClaimsModel(r, model) || !routeAuthorisesGroups(r, userGroups) {
+			continue
+		}
+		if vendor != "" && !routeSupportsVendor(r, vendor) {
+			continue
+		}
+		return r.RequestPathPrefix
+	}
+	return ""
+}
+
+// denyOnlyOnLinkedPath refuses a request for a model that only a linked-login
+// provider serves, on a path that provider does not accept. The vendor behind
+// such a login speaks only its own client's API, so the request cannot be
+// forwarded as it is; the message says which path the provider answers on.
+func denyOnlyOnLinkedPath(surface, model, prefix string) *middleware.Output {
+	out := denyUnknownModel(surface, model)
+	out.DenyReason.Message = fmt.Sprintf(
+		"model %s is served by a ChatGPT login provider, which only accepts Codex requests under %s; point Codex at <endpoint>%s",
+		model, prefix, prefix)
+	out.DenyReason.Details["path_prefix"] = prefix
+	return out
 }
