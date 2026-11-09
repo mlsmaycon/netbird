@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -130,13 +131,40 @@ func TestChatGPTCodexEntry(t *testing.T) {
 	assert.Nil(t, openaiResp.SubscriptionLogin)
 }
 
-// Anthropic forbids third parties from holding Claude.ai logins, so no
-// Anthropic-hosted entry may ever be a subscription login.
-func TestNoAnthropicSubscriptionLogin(t *testing.T) {
-	for _, p := range All() {
-		if p.UsesUserOAuth() {
-			assert.NotContains(t, p.OAuth.Issuer, "anthropic", "entry %s", p.ID)
-			assert.NotContains(t, p.OAuth.Issuer, "claude.ai", "entry %s", p.ID)
-		}
-	}
+// The signed NetBird-Anthropic agreement permits this provider-wide login.
+// Keep its credential destination and routing namespace fixed in the catalog.
+func TestClaudeSubscriptionEntry(t *testing.T) {
+	entry, ok := Lookup("anthropic_claude_login")
+	require.True(t, ok, "the agreement permits an Anthropic subscription entry")
+	require.True(t, entry.UsesUserOAuth(), "Claude must obtain its credential from a linked login")
+	assert.Equal(t, "api.anthropic.com", entry.DefaultHost, "the login must only reach Anthropic")
+	assert.Equal(t, "anthropic", entry.ParserID, "Claude subscription requests use the Messages parser")
+	assert.Equal(t, "Authorization", entry.AuthHeaderName, "OAuth access tokens use bearer authorization")
+	assert.Equal(t, "Bearer ${API_KEY}", entry.AuthHeaderTemplate, "the proxy injects the linked token")
+	assert.Empty(t, entry.PricingSurfaces, "subscription usage must not be priced at API rates")
+	assert.Empty(t, entry.Models, "the subscription catalog must not contribute priced models")
+	assert.Equal(t, OAuthFlowAuthorizationCode, entry.OAuth.Flow, "Claude uses an authorization-code flow")
+	assert.Equal(t, OAuthProtocolAnthropic, entry.OAuth.Protocol, "Claude token handling must not use OpenAI's protocol")
+	assert.Equal(t, "https://claude.ai/oauth/authorize", entry.OAuth.AuthorizeURL, "authorization uses the built-in issuer")
+	assert.Equal(t, "https://platform.claude.com/v1/oauth/token", entry.OAuth.TokenURL, "exchange and refresh use the built-in token endpoint")
+	assert.Equal(t, "https://platform.claude.com/oauth/code/callback", entry.OAuth.RedirectURI, "self-hosted dashboards use the vendor's code page")
+	assert.Equal(t, 15*time.Minute, entry.OAuth.FlowTTL, "unfinished login attempts must expire")
+	assert.Equal(t, "/claude-login", entry.OAuth.RequestPathPrefix, "subscription requests must have an exclusive namespace")
+	assert.Equal(t, entry.OAuth.RequestPathPrefix, entry.OAuth.StripPathPrefix, "the NetBird namespace must not reach Anthropic")
+	assert.NotContains(t, entry.OAuth.Scopes, "org:create_api_key", "inference login does not need API-key creation rights")
+	assert.Equal(t, map[string]string{
+		"anthropic-version": "2023-06-01",
+		"anthropic-beta":    "oauth-2025-04-20",
+	}, entry.OAuth.RequestHeaders, "only the catalog's inference headers should be injected")
+
+	resp := entry.ToAPIResponse()
+	assert.Equal(t, api.AgentNetworkCatalogProviderCredentialKindUserOauth, resp.CredentialKind, "the UI must offer login instead of API-key entry")
+	require.NotNil(t, resp.SubscriptionLogin)
+	assert.Equal(t, "authorization_code", string(resp.SubscriptionLogin.Flow), "the UI must show the code-paste flow")
+	assert.Nil(t, resp.PricingSurfaces, "API pricing must stay absent on the wire")
+
+	static, ok := Lookup("anthropic_api")
+	require.True(t, ok)
+	assert.False(t, static.UsesUserOAuth(), "API-key Anthropic remains a separate credential path")
+	assert.Equal(t, "x-api-key", static.AuthHeaderName, "existing API-key injection must remain intact")
 }

@@ -19,6 +19,8 @@ every LLM request.
    describes the module boundary, the file-level layout, its own flow
    diagrams, the public contracts, the invariants it relies on, and the
    areas worth the closest attention.
+4. **[02-subscription-login-runbook.md](02-subscription-login-runbook.md)** —
+   deploy, link, verify, and recover shared ChatGPT and Claude subscriptions.
 
 ## Directory layout
 
@@ -27,6 +29,7 @@ docs/agent-networks/
 ├── README.md                              # you are here
 ├── 00-overview.md                         # feature summary + module map
 ├── 01-end-to-end-flows.md                 # cross-module mermaid diagrams
+├── 02-subscription-login-runbook.md       # shared login operations and recovery
 └── modules/
     ├── 10-shared-api.md                   # proto + OpenAPI wire contracts
     ├── 20-management-store.md             # SQL persistence layer

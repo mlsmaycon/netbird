@@ -389,6 +389,8 @@ type routerProviderRoute struct {
 	// use. The router serves requests under it only from such routes, and
 	// keeps every other request off them.
 	RequestPathPrefix string `json:"request_path_prefix,omitempty"`
+	// StripPathPrefix removes a NetBird routing namespace before forwarding.
+	StripPathPrefix string `json:"strip_path_prefix,omitempty"`
 }
 
 // indexProviderGroups walks the enabled policies and returns, per
@@ -482,6 +484,7 @@ func buildRouterConfigJSON(providers []*types.Provider, groupIndex map[string][]
 			DiscoveryHost:           discoveryHost(catalogEntry, p.UpstreamURL),
 			LinkedCredential:        catalogEntry.UsesUserOAuth(),
 			RequestPathPrefix:       userOAuthPathPrefix(catalogEntry),
+			StripPathPrefix:         userOAuthStripPathPrefix(catalogEntry),
 		})
 	}
 	out, err := json.Marshal(cfg)
@@ -508,6 +511,14 @@ func userOAuthPathPrefix(entry catalog.Provider) string {
 		return ""
 	}
 	return entry.OAuth.RequestPathPrefix
+}
+
+// userOAuthStripPathPrefix returns the routing namespace of a user_oauth entry.
+func userOAuthStripPathPrefix(entry catalog.Provider) string {
+	if !entry.UsesUserOAuth() {
+		return ""
+	}
+	return entry.OAuth.StripPathPrefix
 }
 
 // discoveryHost returns the host serving this provider's model listing when it

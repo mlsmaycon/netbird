@@ -14,12 +14,14 @@ func TestAnthropicDetectFromURL(t *testing.T) {
 	p := AnthropicParser{}
 
 	cases := map[string]bool{
-		"/v1/messages":         true,
-		"/v1/complete":         true,
-		"/V1/Messages":         true,
-		"/proxy/v1/messages?x": true,
-		"/v1/chat/completions": false,
-		"":                     false,
+		"/v1/messages":                           true,
+		"/v1/complete":                           true,
+		"/V1/Messages":                           true,
+		"/proxy/v1/messages?x":                   true,
+		"/claude-login/v1/messages?beta=true":    true,
+		"/claude-login/v1/messages/count_tokens": true,
+		"/v1/chat/completions":                   false,
+		"":                                       false,
 	}
 	for path, want := range cases {
 		assert.Equal(t, want, p.DetectFromURL(path), "DetectFromURL(%q)", path)

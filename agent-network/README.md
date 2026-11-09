@@ -110,6 +110,44 @@ Until a login is linked, or after OpenAI stops refreshing it, requests are
 refused with `llm_policy.credential_not_linked`, and the provider shows the
 login as not linked or needing to be linked again.
 
+## Claude on a subscription plan
+
+Choose **Anthropic → Sign-in method: Claude** when adding a provider. An
+administrator opens the authorization link, signs in to Claude, then pastes
+the complete code shown by Anthropic back into NetBird. No OAuth client ID,
+client secret, or callback registration is required from the operator. The
+hosted code page works with self-hosted dashboards on arbitrary domains.
+
+NetBird's signed agreement with Anthropic permits holding and relaying this
+subscription login, including provider-wide sharing. Every user and machine
+allowed by the provider's policies shares the linked plan and its usage
+limits. Requests, tokens, models, and sessions remain attributable to each
+caller; subscription usage is not priced at API rates.
+
+Management stores the login encrypted and refreshes it under the existing
+cross-replica refresh lease. Only short-lived access headers reach the proxy.
+An abandoned refresh lease with an uncertain redemption outcome requires
+linking again rather than risking reuse of a rotating token.
+
+Point Claude Code at the subscription route:
+
+```bash
+export ANTHROPIC_BASE_URL="https://<your-endpoint>/claude-login"
+export ANTHROPIC_API_KEY=none
+claude
+```
+
+No Anthropic key is needed: `none` is a placeholder for the local client.
+NetBird authorizes the caller through the tunnel and supplies the provider's
+access token. The proxy strips `/claude-login`
+before forwarding to `https://api.anthropic.com`, with verified TLS. Bare
+Anthropic paths continue to use API-key providers. An unlinked subscription
+route is refused with `llm_policy.credential_not_linked`; it cannot fall back
+to an API-key provider.
+
+See the [subscription login runbook](../docs/agent-networks/02-subscription-login-runbook.md)
+for deployment, recovery, and verification.
+
 ## Architecture 
 
 Agent Network is built on two existing NetBird capabilities:

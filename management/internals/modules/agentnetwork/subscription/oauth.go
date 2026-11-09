@@ -1,4 +1,4 @@
-// Package subscription holds the per-user subscription logins Agent Network
+// Package subscription holds the provider-linked subscription logins Agent Network
 // uses for user_oauth catalog entries: the vendor's login flow, the stored
 // token set, and the refresh that keeps the proxy supplied with short-lived
 // access tokens.
@@ -57,15 +57,17 @@ type DeviceCode struct {
 	Interval     time.Duration
 }
 
-// TokenSet is what the vendor's token endpoint returns. On refresh any field
-// may be empty, meaning the stored value stays.
+// TokenSet is what the vendor's token endpoint returns. Optional refresh and
+// account fields preserve stored values when omitted; expiry rules are vendor-specific.
 type TokenSet struct {
 	AccessToken  string
 	RefreshToken string
 	IDToken      string
+	ExpiresIn    time.Duration
+	Account      AccountClaims
 }
 
-// AccountClaims are the vendor account details read from an id_token.
+// AccountClaims are optional vendor account details from the token response or id_token.
 type AccountClaims struct {
 	AccountID string
 	PlanType  string
@@ -79,10 +81,16 @@ type Client struct {
 }
 
 func (c *Client) httpClient() *http.Client {
+	client := &http.Client{Timeout: httpTimeout}
 	if c != nil && c.HTTP != nil {
-		return c.HTTP
+		custom := *c.HTTP
+		client = &custom
+		if client.Timeout <= 0 {
+			client.Timeout = httpTimeout
+		}
 	}
-	return &http.Client{Timeout: httpTimeout}
+	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
+	return client
 }
 
 // RequestDeviceCode asks the vendor for a user code.
@@ -184,6 +192,14 @@ func (c *Client) exchangeCode(ctx context.Context, prof *catalog.OAuthProfile, c
 // must store the returned one before anything else can use the login.
 // Permanent failures wrap ErrRelinkRequired.
 func (c *Client) Refresh(ctx context.Context, prof *catalog.OAuthProfile, refreshToken string) (*TokenSet, error) {
+	protocol, err := protocolFor(prof)
+	if err != nil {
+		return nil, err
+	}
+	return protocol.refresh(ctx, c, prof, refreshToken)
+}
+
+func (c *Client) refreshOpenAI(ctx context.Context, prof *catalog.OAuthProfile, refreshToken string) (*TokenSet, error) {
 	status, body, err := c.postJSON(ctx, prof.TokenURL, map[string]string{
 		"grant_type":    "refresh_token",
 		"client_id":     prof.ClientID,
@@ -226,9 +242,14 @@ func refreshErrorCode(body []byte) string {
 	}
 	var obj struct {
 		Code string `json:"code"`
+		Type string `json:"type"`
 	}
-	if json.Unmarshal(envelope.Error, &obj) == nil && obj.Code != "" {
-		code = obj.Code
+	if json.Unmarshal(envelope.Error, &obj) == nil {
+		if obj.Code != "" {
+			code = obj.Code
+		} else if obj.Type != "" {
+			code = obj.Type
+		}
 	}
 	if !isErrorCodeShaped(code) {
 		return ""

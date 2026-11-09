@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"go.uber.org/mock/gomock"
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 
 	"github.com/netbirdio/netbird/management/internals/modules/agentnetwork"
 	agentNetworkTypes "github.com/netbirdio/netbird/management/internals/modules/agentnetwork/types"
@@ -47,7 +47,7 @@ type agentNetworkHandlerFixture struct {
 	router  *mux.Router
 }
 
-func newAgentNetworkHandlerFixture(t *testing.T) *agentNetworkHandlerFixture {
+func newAgentNetworkHandlerFixture(t *testing.T, options ...agentnetwork.ManagerOption) *agentNetworkHandlerFixture {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("sqlite store not properly supported on Windows yet")
@@ -77,7 +77,7 @@ func newAgentNetworkHandlerFixture(t *testing.T) *agentNetworkHandlerFixture {
 		UpdateAccountPeers(gomock.Any(), gomock.Any(), gomock.Any()).
 		AnyTimes()
 
-	manager := agentnetwork.NewManager(st, perms, accounts, nil)
+	manager := agentnetwork.NewManager(st, perms, accounts, nil, options...)
 	h := &handler{manager: manager}
 
 	// The labeled bootstrap validates its proxy_address against the live

@@ -182,6 +182,11 @@ func (m *Middleware) Invoke(ctx context.Context, in *middleware.Input) (*middlew
 	if routes := m.linkedRoutesFor(reqPath); len(routes) > 0 {
 		return m.routeLinkedCredential(ctx, in, routes, reqPath, surface, model), nil
 	}
+	// Reserve the login namespace even when no policy publishes its route.
+	// Otherwise an unlinked request could silently use an Anthropic API key.
+	if pathPrefixMatches(claudeLoginPathPrefix, reqPath) {
+		return denyCredential(surface, credentialNotLinked), nil
+	}
 
 	// Vertex AI carries the model in the URL path, not the body, and is
 	// selected by path rather than by the model/vendor table. Route it before
@@ -995,9 +1000,10 @@ func (m *Middleware) allowWithRoute(route ProviderRoute, surface string, userGro
 		// path is silently dropped and the gateway returns a 4xx for
 		// the malformed URL. Empty value leaves the original
 		// target's path untouched.
-		Path:          route.UpstreamPath,
-		StripHeaders:  append([]string(nil), strippedAuthHeaders...),
-		SkipTLSVerify: route.SkipTLSVerify,
+		Path:            route.UpstreamPath,
+		StripPathPrefix: route.StripPathPrefix,
+		StripHeaders:    append([]string(nil), strippedAuthHeaders...),
+		SkipTLSVerify:   route.SkipTLSVerify,
 	}
 	authValue := route.AuthHeaderValue
 	if route.GCPServiceAccountKeyB64 != "" {

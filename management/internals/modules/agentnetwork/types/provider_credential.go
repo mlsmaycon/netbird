@@ -46,6 +46,9 @@ type ProviderCredential struct {
 	FedRAMP           bool   `gorm:"column:fedramp"`
 
 	Status CredentialStatus `gorm:"column:status"`
+	// Generation identifies one linked login, so deleting and relinking a
+	// provider cannot reuse a stale refresh writer's version.
+	Generation string `gorm:"column:generation;not null;default:''"`
 	// Version is bumped on every write. Writers compare-and-swap on it so two
 	// management replicas cannot both act on the same refresh token.
 	Version int64 `gorm:"column:version"`

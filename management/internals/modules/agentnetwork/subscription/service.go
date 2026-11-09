@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -79,16 +80,18 @@ const (
 	FlowFailed  FlowStatus = "failed"
 )
 
-// Flow is the caller-visible state of a link flow. It carries the user code
-// to show, never the device handle used to poll.
+// Flow is the caller-visible state of a link flow. It carries the login URL
+// or user code to show, never the PKCE verifier or device handle used to poll.
 type Flow struct {
-	ID              string
-	Status          FlowStatus
-	UserCode        string
-	VerificationURI string
-	ExpiresAt       time.Time
-	Interval        time.Duration
-	// JustLinked is true only on the poll that stored the login, so the
+	ID               string
+	Flow             catalog.OAuthFlow
+	AuthorizationURI string
+	Status           FlowStatus
+	UserCode         string
+	VerificationURI  string
+	ExpiresAt        time.Time
+	Interval         time.Duration
+	// JustLinked is true only on the operation that stored the login, so the
 	// caller can record the event once.
 	JustLinked bool
 }
@@ -124,34 +127,50 @@ func NewService(credStore CredentialStore, cache nbcache.Store, client *Client) 
 
 type flowState struct {
 	Key Key `json:"key"`
-	// StartedBy is the user who started the flow. Only they may poll it, and
+	// StartedBy is the user who started the flow. Only they may complete or poll it, and
 	// the login it stores is recorded as linked by them.
-	StartedBy    string    `json:"started_by"`
-	DeviceAuthID string    `json:"device_auth_id"`
-	UserCode     string    `json:"user_code"`
-	IntervalMS   int64     `json:"interval_ms"`
-	ExpiresAt    time.Time `json:"expires_at"`
-	NextPollAt   time.Time `json:"next_poll_at"`
-	Verification string    `json:"verification_uri"`
+	StartedBy          string            `json:"started_by"`
+	Flow               catalog.OAuthFlow `json:"flow,omitempty"`
+	ProviderType       string            `json:"provider_type,omitempty"`
+	AuthorizationURI   string            `json:"authorization_uri,omitempty"`
+	AuthorizationState string            `json:"authorization_state,omitempty"`
+	DeviceAuthID       string            `json:"device_auth_id"`
+	UserCode           string            `json:"user_code"`
+	IntervalMS         int64             `json:"interval_ms"`
+	ExpiresAt          time.Time         `json:"expires_at"`
+	NextPollAt         time.Time         `json:"next_poll_at"`
+	Verification       string            `json:"verification_uri"`
 }
 
 func (f *flowState) view(id string, st FlowStatus) *Flow {
+	flow := f.Flow
+	if flow == "" {
+		// Device flows cached before authorization-code support remain readable.
+		flow = catalog.OAuthFlowDevice
+	}
 	return &Flow{
-		ID:              id,
-		Status:          st,
-		UserCode:        f.UserCode,
-		VerificationURI: f.Verification,
-		ExpiresAt:       f.ExpiresAt,
-		Interval:        time.Duration(f.IntervalMS) * time.Millisecond,
+		ID:               id,
+		Flow:             flow,
+		AuthorizationURI: f.AuthorizationURI,
+		Status:           st,
+		UserCode:         f.UserCode,
+		VerificationURI:  f.Verification,
+		ExpiresAt:        f.ExpiresAt,
+		Interval:         time.Duration(f.IntervalMS) * time.Millisecond,
 	}
 }
 
-// StartLink begins a login for key on behalf of startedBy and returns the code
-// to enter. The device handle stays in the shared cache, bound to key and the
-// user, so any replica can serve the polls.
+// StartLink begins a login for key on behalf of startedBy. Flow secrets stay in
+// the shared cache, bound to key and the user, so any replica can complete it.
 func (s *Service) StartLink(ctx context.Context, key Key, startedBy string, entry catalog.Provider) (*Flow, error) {
 	prof := entry.OAuth
-	if prof == nil || prof.Flow != catalog.OAuthFlowDevice {
+	if _, err := protocolFor(prof); err != nil {
+		return nil, err
+	}
+	if prof.Flow == catalog.OAuthFlowAuthorizationCode {
+		return s.startAuthorizationLink(ctx, key, startedBy, entry)
+	}
+	if prof.Flow != catalog.OAuthFlowDevice || (prof.Protocol != "" && prof.Protocol != catalog.OAuthProtocolOpenAI) {
 		return nil, ErrUnsupportedFlow
 	}
 	if s.cache == nil {
@@ -172,6 +191,8 @@ func (s *Service) StartLink(ctx context.Context, key Key, startedBy string, entr
 	now := s.now()
 	state := &flowState{
 		Key:          key,
+		Flow:         catalog.OAuthFlowDevice,
+		ProviderType: entry.ID,
 		StartedBy:    startedBy,
 		DeviceAuthID: code.DeviceAuthID,
 		UserCode:     code.UserCode,
@@ -186,12 +207,11 @@ func (s *Service) StartLink(ctx context.Context, key Key, startedBy string, entr
 	return state.view(id, FlowPending), nil
 }
 
-// PollLink advances a login started by StartLink. It contacts the vendor at
-// most once per poll interval no matter how often it is called, and stores
-// the tokens when the user has approved.
+// PollLink reads a login started by StartLink. Device flows contact the vendor
+// at most once per poll interval; authorization-code flows return cached state.
 func (s *Service) PollLink(ctx context.Context, key Key, userID, flowID string, entry catalog.Provider) (*Flow, error) {
-	if entry.OAuth == nil {
-		return nil, ErrUnsupportedFlow
+	if _, err := protocolFor(entry.OAuth); err != nil {
+		return nil, err
 	}
 	if s.cache == nil {
 		return nil, errNoFlowCache
@@ -200,17 +220,20 @@ func (s *Service) PollLink(ctx context.Context, key Key, userID, flowID string, 
 	if err != nil {
 		return nil, err
 	}
-	if state.Key != key || state.StartedBy != userID {
+	if state.Key != key || state.StartedBy != userID || (state.ProviderType != "" && state.ProviderType != entry.ID) {
+		return nil, ErrFlowNotFound
+	}
+	if state.view(flowID, FlowPending).Flow != entry.OAuth.Flow {
 		return nil, ErrFlowNotFound
 	}
 	if result, ok := s.flowResult(ctx, flowID); ok {
 		return state.view(flowID, result), nil
 	}
 	now := s.now()
-	if now.After(state.ExpiresAt) {
+	if !now.Before(state.ExpiresAt) {
 		return state.view(flowID, FlowExpired), nil
 	}
-	if now.Before(state.NextPollAt) {
+	if state.Flow == catalog.OAuthFlowAuthorizationCode || now.Before(state.NextPollAt) {
 		return state.view(flowID, FlowPending), nil
 	}
 	acquired, err := s.cache.SetNX(ctx, flowKeyPrefix+flowID+":lease", "1", pollLease)
@@ -256,7 +279,11 @@ func (s *Service) pollVendor(ctx context.Context, flowID string, state *flowStat
 }
 
 func (s *Service) storeLinked(ctx context.Context, key Key, linkedBy string, prof *catalog.OAuthProfile, tokens *TokenSet) error {
-	claims, err := ParseAccountClaims(prof, tokens.IDToken)
+	protocol, err := protocolFor(prof)
+	if err != nil {
+		return err
+	}
+	claims, err := protocol.claims(prof, tokens)
 	if err != nil {
 		return err
 	}
@@ -267,7 +294,7 @@ func (s *Service) storeLinked(ctx context.Context, key Key, linkedBy string, pro
 		LinkedBy:          linkedBy,
 		RefreshToken:      tokens.RefreshToken,
 		AccessToken:       tokens.AccessToken,
-		AccessExpiresAt:   accessExpiry(tokens.AccessToken, now),
+		AccessExpiresAt:   protocol.expiry(tokens, now),
 		ExternalAccountID: claims.AccountID,
 		PlanType:          claims.PlanType,
 		FedRAMP:           claims.FedRAMP,
@@ -289,8 +316,8 @@ func (s *Service) Unlink(ctx context.Context, key Key) error {
 // to expiry. It returns ErrNotLinked or ErrRelinkRequired when there is
 // nothing usable to serve.
 func (s *Service) Access(ctx context.Context, key Key, entry catalog.Provider) (*Access, error) {
-	if entry.OAuth == nil {
-		return nil, ErrUnsupportedFlow
+	if _, err := protocolFor(entry.OAuth); err != nil {
+		return nil, err
 	}
 	cred, err := s.load(ctx, key)
 	if err != nil {
@@ -326,6 +353,10 @@ func (s *Service) load(ctx context.Context, key Key) (*types.ProviderCredential,
 // vendor kills a login whose refresh token is presented twice, so everyone
 // else waits for that replica's result instead.
 func (s *Service) refresh(ctx context.Context, key Key, prof *catalog.OAuthProfile) (*types.ProviderCredential, error) {
+	protocol, err := protocolFor(prof)
+	if err != nil {
+		return nil, err
+	}
 	deadline := s.now().Add(refreshLease + time.Second)
 	for {
 		cred, err := s.load(ctx, key)
@@ -348,6 +379,21 @@ func (s *Service) refresh(ctx context.Context, key Key, prof *catalog.OAuthProfi
 			}
 			continue
 		}
+		if cred.RefreshLeaseUntil != nil && protocol.uncertainRefreshIsTerminal() {
+			// An abandoned holder may have redeemed the token before losing its result.
+			next := cred.Copy()
+			next.Status = types.CredentialNeedsRelink
+			next.AccessToken, next.RefreshToken = "", ""
+			next.RefreshLeaseUntil = nil
+			ok, err := s.store.CompareAndSwapAgentNetworkProviderCredential(ctx, next, cred.Version)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				continue
+			}
+			return nil, ErrRelinkRequired
+		}
 		claimed := cred.Copy()
 		lease := now.Add(refreshLease)
 		claimed.RefreshLeaseUntil = &lease
@@ -367,6 +413,9 @@ func (s *Service) refresh(ctx context.Context, key Key, prof *catalog.OAuthProfi
 func (s *Service) redeem(ctx context.Context, key Key, prof *catalog.OAuthProfile, cred *types.ProviderCredential) (*types.ProviderCredential, error) {
 	held := cred.Version
 	tokens, err := s.client.Refresh(ctx, prof, cred.RefreshToken)
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), httpTimeout)
+	defer cancel()
+	ctx = writeCtx
 	next := cred.Copy()
 	next.RefreshLeaseUntil = nil
 	switch {
@@ -389,7 +438,9 @@ func (s *Service) redeem(ctx context.Context, key Key, prof *catalog.OAuthProfil
 		return nil, fmt.Errorf("refresh subscription login: %w", err)
 	}
 
-	applyRefresh(next, prof, tokens, s.now())
+	if err := applyRefresh(next, prof, tokens, s.now()); err != nil {
+		return nil, err
+	}
 	return s.persistRefresh(ctx, key, next, held)
 }
 
@@ -416,22 +467,27 @@ func (s *Service) persistRefresh(ctx context.Context, key Key, next *types.Provi
 	return nil, fmt.Errorf("store refreshed subscription login: %w", lastErr)
 }
 
-func applyRefresh(cred *types.ProviderCredential, prof *catalog.OAuthProfile, tokens *TokenSet, now time.Time) {
+func applyRefresh(cred *types.ProviderCredential, prof *catalog.OAuthProfile, tokens *TokenSet, now time.Time) error {
+	protocol, err := protocolFor(prof)
+	if err != nil {
+		return err
+	}
 	if tokens.AccessToken != "" {
 		cred.AccessToken = tokens.AccessToken
-		cred.AccessExpiresAt = accessExpiry(tokens.AccessToken, now)
+		cred.AccessExpiresAt = protocol.expiry(tokens, now)
 	}
 	if tokens.RefreshToken != "" {
 		cred.RefreshToken = tokens.RefreshToken
 	}
-	if tokens.IDToken != "" {
-		if claims, err := ParseAccountClaims(prof, tokens.IDToken); err == nil {
+	if tokens.IDToken != "" || tokens.Account.AccountID != "" {
+		if claims, err := protocol.claims(prof, tokens); err == nil {
 			cred.ExternalAccountID = claims.AccountID
 			cred.PlanType = claims.PlanType
 			cred.FedRAMP = claims.FedRAMP
 		}
 	}
 	cred.LastRefreshedAt = &now
+	return nil
 }
 
 func accessExpiry(accessToken string, now time.Time) time.Time {
@@ -452,6 +508,14 @@ func accessHeaders(entry catalog.Provider, cred *types.ProviderCredential) []Hea
 	}
 	if prof.FedRAMPHeader != "" && cred.FedRAMP {
 		headers = append(headers, Header{Name: prof.FedRAMPHeader, Value: "true"})
+	}
+	names := make([]string, 0, len(prof.RequestHeaders))
+	for name := range prof.RequestHeaders {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		headers = append(headers, Header{Name: name, Value: prof.RequestHeaders[name]})
 	}
 	return headers
 }

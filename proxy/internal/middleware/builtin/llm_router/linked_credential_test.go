@@ -18,12 +18,13 @@ import (
 )
 
 type fakeCredentialClient struct {
-	calls  atomic.Int32
-	status proto.GetLLMProviderCredentialResponse_Status
-	err    error
-	expiry time.Time
-	gotReq *proto.GetLLMProviderCredentialRequest
-	mu     sync.Mutex
+	calls   atomic.Int32
+	status  proto.GetLLMProviderCredentialResponse_Status
+	err     error
+	expiry  time.Time
+	gotReq  *proto.GetLLMProviderCredentialRequest
+	mu      sync.Mutex
+	headers []*proto.LLMCredentialHeader
 }
 
 func (f *fakeCredentialClient) GetLLMProviderCredential(_ context.Context, in *proto.GetLLMProviderCredentialRequest, _ ...grpc.CallOption) (*proto.GetLLMProviderCredentialResponse, error) {
@@ -41,12 +42,16 @@ func (f *fakeCredentialClient) GetLLMProviderCredential(_ context.Context, in *p
 	if expiry.IsZero() {
 		expiry = time.Now().Add(time.Hour)
 	}
-	return &proto.GetLLMProviderCredentialResponse{
-		Status: proto.GetLLMProviderCredentialResponse_OK,
-		Headers: []*proto.LLMCredentialHeader{
+	headers := f.headers
+	if headers == nil {
+		headers = []*proto.LLMCredentialHeader{
 			{Name: "Authorization", Value: "Bearer linked-" + in.GetProviderId()},
 			{Name: "chatgpt-account-id", Value: "acct-42"},
-		},
+		}
+	}
+	return &proto.GetLLMProviderCredentialResponse{
+		Status:    proto.GetLLMProviderCredentialResponse_OK,
+		Headers:   headers,
 		ExpiresAt: timestamppb.New(expiry),
 	}, nil
 }

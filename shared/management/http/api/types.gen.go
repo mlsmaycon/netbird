@@ -103,12 +103,15 @@ func (e AgentNetworkCatalogProviderKind) Valid() bool {
 
 // Defines values for AgentNetworkCatalogSubscriptionLoginFlow.
 const (
-	AgentNetworkCatalogSubscriptionLoginFlowDevice AgentNetworkCatalogSubscriptionLoginFlow = "device"
+	AgentNetworkCatalogSubscriptionLoginFlowAuthorizationCode AgentNetworkCatalogSubscriptionLoginFlow = "authorization_code"
+	AgentNetworkCatalogSubscriptionLoginFlowDevice            AgentNetworkCatalogSubscriptionLoginFlow = "device"
 )
 
 // Valid indicates whether the value is a known member of the AgentNetworkCatalogSubscriptionLoginFlow enum.
 func (e AgentNetworkCatalogSubscriptionLoginFlow) Valid() bool {
 	switch e {
+	case AgentNetworkCatalogSubscriptionLoginFlowAuthorizationCode:
+		return true
 	case AgentNetworkCatalogSubscriptionLoginFlowDevice:
 		return true
 	default:
@@ -152,6 +155,24 @@ func (e AgentNetworkManagedProxyState) Valid() bool {
 	case AgentNetworkManagedProxyStateProvisioning:
 		return true
 	case AgentNetworkManagedProxyStateReady:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentNetworkProviderLinkFlowFlow.
+const (
+	AgentNetworkProviderLinkFlowFlowAuthorizationCode AgentNetworkProviderLinkFlowFlow = "authorization_code"
+	AgentNetworkProviderLinkFlowFlowDevice            AgentNetworkProviderLinkFlowFlow = "device"
+)
+
+// Valid indicates whether the value is a known member of the AgentNetworkProviderLinkFlowFlow enum.
+func (e AgentNetworkProviderLinkFlowFlow) Valid() bool {
+	switch e {
+	case AgentNetworkProviderLinkFlowFlowAuthorizationCode:
+		return true
+	case AgentNetworkProviderLinkFlowFlowDevice:
 		return true
 	default:
 		return false
@@ -2237,6 +2258,7 @@ type AgentNetworkCatalogProviderKind string
 // AgentNetworkCatalogSubscriptionLogin How a subscription login is linked to a user_oauth provider.
 type AgentNetworkCatalogSubscriptionLogin struct {
 	// Flow "device" — the user enters a short code on the vendor's page (verification_uri) and the dashboard polls until they approve.
+	// "authorization_code" — the user opens authorization_uri from the started flow and submits the returned code to complete it.
 	Flow AgentNetworkCatalogSubscriptionLoginFlow `json:"flow"`
 
 	// VerificationUri The vendor page where the user enters their code.
@@ -2244,6 +2266,7 @@ type AgentNetworkCatalogSubscriptionLogin struct {
 }
 
 // AgentNetworkCatalogSubscriptionLoginFlow "device" — the user enters a short code on the vendor's page (verification_uri) and the dashboard polls until they approve.
+// "authorization_code" — the user opens authorization_uri from the started flow and submits the returned code to complete it.
 type AgentNetworkCatalogSubscriptionLoginFlow string
 
 // AgentNetworkConsumption One per-(dimension, window) consumption counter row. The proxy ticks one row per dimension on every served LLM request; the dashboard reads this listing to surface live counter growth.
@@ -2537,10 +2560,22 @@ type AgentNetworkProvider struct {
 	UpstreamUrl string `json:"upstream_url"`
 }
 
-// AgentNetworkProviderLinkFlow A subscription login in progress. Show user_code and verification_uri to the user, then poll until status leaves "pending".
+// AgentNetworkProviderLinkCompletion The authorization result pasted from the vendor's code page. Consumed once and bound to the caller and provider that started the flow.
+type AgentNetworkProviderLinkCompletion struct {
+	// Code The complete code and state returned by the vendor, or the registered callback URL containing both.
+	Code string `json:"code"`
+}
+
+// AgentNetworkProviderLinkFlow A subscription login in progress. Device flows show user_code and verification_uri and poll for approval. Authorization-code flows open authorization_uri and submit the returned code to the completion endpoint. Never contains tokens or the PKCE verifier.
 type AgentNetworkProviderLinkFlow struct {
-	// ExpiresAt When user_code stops being accepted.
+	// AuthorizationUri Vendor authorization URL for this authorization-code flow. Contains its PKCE challenge and state, never its verifier.
+	AuthorizationUri *string `json:"authorization_uri,omitempty"`
+
+	// ExpiresAt When this login attempt expires.
 	ExpiresAt time.Time `json:"expires_at"`
+
+	// Flow Login interaction. Omitted by older servers, which only support device login.
+	Flow *AgentNetworkProviderLinkFlowFlow `json:"flow,omitempty"`
 
 	// Id Flow identifier for polling. Bound to the caller who started it.
 	Id string `json:"id"`
@@ -2554,12 +2589,15 @@ type AgentNetworkProviderLinkFlow struct {
 	// "failed" — the vendor refused the login; start a new flow.
 	Status AgentNetworkProviderLinkFlowStatus `json:"status"`
 
-	// UserCode The code the user enters on the vendor's page.
+	// UserCode The code the user enters on the vendor's page for a device flow. Empty for authorization-code flows.
 	UserCode string `json:"user_code"`
 
-	// VerificationUri The vendor page where the user enters user_code.
+	// VerificationUri The vendor page where the user enters user_code for a device flow. Empty for authorization-code flows.
 	VerificationUri string `json:"verification_uri"`
 }
+
+// AgentNetworkProviderLinkFlowFlow Login interaction. Omitted by older servers, which only support device login.
+type AgentNetworkProviderLinkFlowFlow string
 
 // AgentNetworkProviderLinkFlowStatus "pending" — waiting for the user to approve on the vendor's page.
 // "linked" — the login is stored; the flow is finished.
@@ -6412,6 +6450,9 @@ type PostApiAgentNetworkProvidersJSONRequestBody = AgentNetworkProviderRequest
 
 // PutApiAgentNetworkProvidersProviderIdJSONRequestBody defines body for PutApiAgentNetworkProvidersProviderId for application/json ContentType.
 type PutApiAgentNetworkProvidersProviderIdJSONRequestBody = AgentNetworkProviderRequest
+
+// PostApiAgentNetworkProvidersProviderIdLinkFlowIdJSONRequestBody defines body for PostApiAgentNetworkProvidersProviderIdLinkFlowId for application/json ContentType.
+type PostApiAgentNetworkProvidersProviderIdLinkFlowIdJSONRequestBody = AgentNetworkProviderLinkCompletion
 
 // PostApiAgentNetworkSettingsJSONRequestBody defines body for PostApiAgentNetworkSettings for application/json ContentType.
 type PostApiAgentNetworkSettingsJSONRequestBody = AgentNetworkSettingsCreateRequest

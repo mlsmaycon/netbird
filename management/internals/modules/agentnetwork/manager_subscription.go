@@ -126,6 +126,28 @@ func (m *managerImpl) PollProviderLink(ctx context.Context, accountID, userID, p
 	return flow, nil
 }
 
+// CompleteProviderLink exchanges the authorization result for a flow started by the caller.
+func (m *managerImpl) CompleteProviderLink(ctx context.Context, accountID, userID, providerID, flowID, code string) (*subscription.Flow, error) {
+	if err := m.requirePermission(ctx, accountID, userID, modules.AgentNetworkProviders, operations.Update); err != nil {
+		return nil, err
+	}
+	if !m.store.FieldEncryptionEnabled() {
+		return nil, status.Errorf(status.PreconditionFailed, "subscription logins need a datastore encryption key on the management server")
+	}
+	provider, entry, err := m.linkTarget(ctx, accountID, providerID)
+	if err != nil {
+		return nil, err
+	}
+	flow, err := m.subscriptions.CompleteLink(ctx, subscription.Key{AccountID: accountID, ProviderID: providerID}, userID, flowID, code, entry)
+	if err != nil {
+		return nil, linkError(err)
+	}
+	if flow.JustLinked {
+		m.accountManager.StoreEvent(ctx, userID, providerID, accountID, activity.AgentNetworkSubscriptionLinked, provider.EventMeta())
+	}
+	return flow, nil
+}
+
 // UnlinkProvider forgets a provider's linked login.
 func (m *managerImpl) UnlinkProvider(ctx context.Context, accountID, userID, providerID string) error {
 	if err := m.requirePermission(ctx, accountID, userID, modules.AgentNetworkProviders, operations.Update); err != nil {
@@ -160,6 +182,8 @@ func linkError(err error) error {
 		return status.Errorf(status.PreconditionFailed, "the vendor has device login turned off for this client")
 	case errors.Is(err, subscription.ErrUnsupportedFlow):
 		return status.Errorf(status.InvalidArgument, "provider login flow is not supported")
+	case errors.Is(err, subscription.ErrInvalidAuthorizationCode):
+		return status.Errorf(status.InvalidArgument, "authorization result is invalid or belongs to another login attempt")
 	default:
 		return fmt.Errorf("subscription link: %w", err)
 	}
@@ -206,6 +230,11 @@ func (*mockManager) StartProviderLink(_ context.Context, _, _, _ string) (*subsc
 
 // PollProviderLink on the mock manager is not supported.
 func (*mockManager) PollProviderLink(_ context.Context, _, _, _, _ string) (*subscription.Flow, error) {
+	return nil, ErrProviderNotLinkable
+}
+
+// CompleteProviderLink on the mock manager is not supported.
+func (*mockManager) CompleteProviderLink(_ context.Context, _, _, _, _, _ string) (*subscription.Flow, error) {
 	return nil, ErrProviderNotLinkable
 }
 

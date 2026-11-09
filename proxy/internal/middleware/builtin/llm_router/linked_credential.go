@@ -3,6 +3,9 @@ package llm_router
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +17,9 @@ import (
 )
 
 const (
+	// claudeLoginPathPrefix is reserved even when the linked route is absent.
+	claudeLoginPathPrefix = "/claude-login"
+
 	//nolint:gosec // deny code label, not a credential
 	denyCodeCredentialNotLinked = "llm_policy.credential_not_linked"
 	//nolint:gosec // deny reason label, not a credential
@@ -185,7 +191,7 @@ func headersFromResponse(resp *proto.GetLLMProviderCredentialResponse) ([]middle
 
 // isLinkedCredentialRoute reports whether a route is served with a linked
 // login and selected by request path. Such routes are kept out of
-// the shared model table: their upstream speaks a different API.
+// the shared model table so the path selects the credential class.
 func isLinkedCredentialRoute(r ProviderRoute) bool {
 	return r.LinkedCredential || r.RequestPathPrefix != ""
 }
@@ -206,31 +212,91 @@ func (m *Middleware) linkedRoutesFor(reqPath string) []ProviderRoute {
 // picks a route by model among those routes only, then attaches the
 // provider's linked login. Every failure to obtain it denies.
 func (m *Middleware) routeLinkedCredential(ctx context.Context, in *middleware.Input, routes []ProviderRoute, reqPath, surface, model string) *middleware.Output {
+	readPath := linkedReadPath(routes, reqPath, in.Method)
+	if isModelLessPath(readPath) {
+		return m.routeLinkedModelless(ctx, in, routes, reqPath, surface)
+	}
+	detail, _ := modelDetailID(readPath)
+	if detail != "" {
+		model = detail
+	}
 	if model == "" {
-		if !isNonInferenceMethod(in.Method) {
-			return denyMissingModel(surface)
-		}
-		for _, r := range routes {
-			if routeAuthorisesGroups(r, in.UserGroups) {
-				out := m.allowLinkedCredential(ctx, in, r, surface)
-				if out.Decision == middleware.DecisionAllow {
-					markNonInference(out)
-				}
-				return out
-			}
-		}
-		return denyNoAuthorisedRoute(surface, "")
+		return m.routeLinkedModelless(ctx, in, routes, reqPath, surface)
 	}
 
 	route, outcome := matchRouteIn(routes, model, surface, reqPath, in.UserGroups)
 	switch outcome {
 	case matchOutcomeFound:
-		return m.allowLinkedCredential(ctx, in, route, surface)
+		out := m.allowLinkedCredential(ctx, in, route, surface)
+		if out.Decision != middleware.DecisionAllow {
+			return out
+		}
+		if detail != "" {
+			markNonInference(out)
+			out.Metadata = append(out.Metadata, middleware.KV{Key: middleware.KeyLLMModel, Value: detail})
+		} else if in.Method == http.MethodPost && linkedNativePath(route, reqPath) == "/v1/messages/count_tokens" {
+			markNonInference(out)
+		}
+		return out
 	case matchOutcomeUnauthorised:
 		return denyNoAuthorisedRoute(surface, model)
 	default:
 		return denyUnknownModel(surface, model)
 	}
+}
+
+// linkedNativePath returns the endpoint after a routing namespace is removed.
+// Vendor-native prefixes, such as ChatGPT's, have no StripPathPrefix.
+func linkedNativePath(route ProviderRoute, reqPath string) string {
+	if route.StripPathPrefix != "" && pathPrefixMatches(route.StripPathPrefix, reqPath) {
+		return strings.TrimPrefix(reqPath, route.StripPathPrefix)
+	}
+	return reqPath
+}
+
+// linkedReadPath identifies discovery before any caller-supplied body model
+// can affect routing or suppress the model-list policy filter.
+func linkedReadPath(routes []ProviderRoute, reqPath, method string) string {
+	if !isNonInferenceMethod(method) {
+		return ""
+	}
+	for _, route := range routes {
+		nativePath := linkedNativePath(route, reqPath)
+		if _, detail := modelDetailID(nativePath); detail || isModelLessPath(nativePath) {
+			return nativePath
+		}
+	}
+	return ""
+}
+
+func (m *Middleware) routeLinkedModelless(ctx context.Context, in *middleware.Input, routes []ProviderRoute, reqPath, surface string) *middleware.Output {
+	if !isNonInferenceMethod(in.Method) {
+		return denyMissingModel(surface)
+	}
+	for _, route := range routes {
+		nativePath := linkedNativePath(route, reqPath)
+		if route.StripPathPrefix != "" && !isModelLessPath(nativePath) {
+			continue
+		}
+		if !routeAuthorisesGroups(route, in.UserGroups) {
+			continue
+		}
+		var models []string
+		if isListingPath(nativePath) {
+			var bounded bool
+			models, bounded = discoverableModels(route, in.UserGroups)
+			if bounded && len(models) == 0 {
+				continue
+			}
+		}
+		out := m.allowLinkedCredential(ctx, in, route, surface)
+		if out.Decision == middleware.DecisionAllow {
+			markNonInference(out)
+			out.Mutations.RewriteUpstream.DiscoveryModels = models
+		}
+		return out
+	}
+	return denyNoAuthorisedRoute(surface, "")
 }
 
 func (m *Middleware) allowLinkedCredential(ctx context.Context, in *middleware.Input, route ProviderRoute, surface string) *middleware.Output {
@@ -247,8 +313,16 @@ func (m *Middleware) allowLinkedCredential(ctx context.Context, in *middleware.I
 	}
 	// Every header comes from management; the route itself holds no
 	// credential, so nothing static may ride along.
-	out.Mutations.RewriteUpstream.AuthHeader = nil
-	out.Mutations.RewriteUpstream.ExtraAuthHeaders = headers
+	rewrite := out.Mutations.RewriteUpstream
+	rewrite.AuthHeader = nil
+	rewrite.ExtraAuthHeaders = headers
+	// Clear client copies before injecting management's values, including
+	// vendor protocol headers required by this particular login profile.
+	for _, header := range headers {
+		if !slices.ContainsFunc(rewrite.StripHeaders, func(name string) bool { return strings.EqualFold(name, header.Name) }) {
+			rewrite.StripHeaders = append(rewrite.StripHeaders, header.Name)
+		}
+	}
 	out.Metadata = append(out.Metadata, middleware.KV{Key: middleware.KeyLLMBillingMode, Value: "subscription"})
 	return out
 }
@@ -299,13 +373,12 @@ func (m *Middleware) linkedPathFor(model, vendor string, userGroups []string) st
 }
 
 // denyOnlyOnLinkedPath refuses a request for a model that only a linked-login
-// provider serves, on a path that provider does not accept. The vendor behind
-// such a login speaks only its own client's API, so the request cannot be
-// forwarded as it is; the message says which path the provider answers on.
+// provider serves, on a path that provider does not accept. The message says
+// which base URL selects the linked login.
 func denyOnlyOnLinkedPath(surface, model, prefix string) *middleware.Output {
 	out := denyUnknownModel(surface, model)
 	out.DenyReason.Message = fmt.Sprintf(
-		"model %s is served by a ChatGPT login provider, which only accepts Codex requests under %s; point Codex at <endpoint>%s",
+		"model %s is served by a subscription login provider under %s; point the client's base URL at <endpoint>%s",
 		model, prefix, prefix)
 	out.DenyReason.Details["path_prefix"] = prefix
 	return out

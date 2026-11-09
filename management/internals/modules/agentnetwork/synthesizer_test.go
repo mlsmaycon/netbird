@@ -50,6 +50,43 @@ func newSynthTestProvider() *types.Provider {
 	}
 }
 
+func TestBuildRouterConfigJSON_ClaudeLoginNamespace(t *testing.T) {
+	login := newSynthTestProvider()
+	login.ProviderID = "anthropic_claude_login"
+	login.UpstreamURL = "http://untrusted.example/ignored"
+	login.SkipTLSVerification = true
+	login.Models = []types.ProviderModel{{ID: "claude-sonnet-4-5"}}
+	apiKey := *login
+	apiKey.ID = "prov-api-key"
+	apiKey.ProviderID = "anthropic_api"
+	apiKey.UpstreamURL = "https://api.anthropic.com"
+	apiKey.SkipTLSVerification = false
+
+	raw, err := buildRouterConfigJSON([]*types.Provider{login, &apiKey}, map[string][]string{
+		login.ID:  {"grp-engineers"},
+		apiKey.ID: {"grp-engineers"},
+	}, nil)
+	require.NoError(t, err)
+	var cfg routerConfig
+	require.NoError(t, json.Unmarshal(raw, &cfg))
+	require.Len(t, cfg.Providers, 2, "both credential classes must reach the proxy")
+	linked := cfg.Providers[0]
+	assert.True(t, linked.LinkedCredential, "subscription route obtains its credential from management")
+	assert.Equal(t, "/claude-login", linked.RequestPathPrefix, "the subscription uses a separate request namespace")
+	assert.Equal(t, "/claude-login", linked.StripPathPrefix, "the proxy removes only NetBird's namespace")
+	assert.Equal(t, "https", linked.UpstreamScheme, "a stored override must not downgrade the login transport")
+	assert.Equal(t, "api.anthropic.com", linked.UpstreamHost, "a stored override must not redirect the login token")
+	assert.Empty(t, linked.UpstreamPath, "stored paths must not change the subscription endpoint")
+	assert.False(t, linked.SkipTLSVerify, "the subscription endpoint always verifies TLS")
+	assert.Empty(t, linked.AuthHeaderValue, "the mapping must not contain subscription credentials or a stale API key")
+	static := cfg.Providers[1]
+	assert.False(t, static.LinkedCredential, "API-key routes keep their existing authentication")
+	assert.Empty(t, static.RequestPathPrefix, "API-key routes stay on the native Anthropic path")
+	assert.Empty(t, static.StripPathPrefix, "API-key paths must pass through unchanged")
+	assert.Equal(t, "x-api-key", static.AuthHeaderName, "the static Anthropic API-key header is unchanged")
+	assert.Equal(t, apiKey.APIKey, static.AuthHeaderValue, "the static provider retains its configured API key")
+}
+
 func newSynthTestPolicy(providerID, sourceGroupID, guardrailID string) *types.Policy {
 	policy := &types.Policy{
 		ID:                     "pol-1",

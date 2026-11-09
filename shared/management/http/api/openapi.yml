@@ -5711,7 +5711,8 @@ components:
           type: string
           description: |
             "device" — the user enters a short code on the vendor's page (verification_uri) and the dashboard polls until they approve.
-          enum: [device]
+            "authorization_code" — the user opens authorization_uri from the started flow and submits the returned code to complete it.
+          enum: [device, authorization_code]
           example: "device"
         verification_uri:
           type: string
@@ -5752,7 +5753,7 @@ components:
         - status
     AgentNetworkProviderLinkFlow:
       type: object
-      description: A subscription login in progress. Show user_code and verification_uri to the user, then poll until status leaves "pending".
+      description: A subscription login in progress. Device flows show user_code and verification_uri and poll for approval. Authorization-code flows open authorization_uri and submit the returned code to the completion endpoint. Never contains tokens or the PKCE verifier.
       properties:
         id:
           type: string
@@ -5767,18 +5768,25 @@ components:
             "failed" — the vendor refused the login; start a new flow.
           enum: [pending, linked, expired, failed]
           example: "pending"
+        flow:
+          type: string
+          description: Login interaction. Omitted by older servers, which only support device login.
+          enum: [device, authorization_code]
+        authorization_uri:
+          type: string
+          description: Vendor authorization URL for this authorization-code flow. Contains its PKCE challenge and state, never its verifier.
         user_code:
           type: string
-          description: The code the user enters on the vendor's page.
+          description: The code the user enters on the vendor's page for a device flow. Empty for authorization-code flows.
           example: "ABCD-1234"
         verification_uri:
           type: string
-          description: The vendor page where the user enters user_code.
+          description: The vendor page where the user enters user_code for a device flow. Empty for authorization-code flows.
           example: "https://auth.openai.com/codex/device"
         expires_at:
           type: string
           format: date-time
-          description: When user_code stops being accepted.
+          description: When this login attempt expires.
         interval_seconds:
           type: integer
           description: The shortest useful polling interval. Polling faster does no harm but returns the same answer.
@@ -5790,6 +5798,17 @@ components:
         - verification_uri
         - expires_at
         - interval_seconds
+    AgentNetworkProviderLinkCompletion:
+      type: object
+      description: The authorization result pasted from the vendor's code page. Consumed once and bound to the caller and provider that started the flow.
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 8192
+          description: The complete code and state returned by the vendor, or the registered callback URL containing both.
+      required:
+        - code
     AgentNetworkAgentConfig:
       type: object
       description: The caller-scoped Agent Network connection config backing the self-service "Connect your agent" view. Available to every authenticated user; the providers are computed from the caller's own groups and the answer carries display metadata only.
@@ -14150,7 +14169,7 @@ paths:
     post:
       summary: Start linking the provider's subscription
       description: |
-        Starts the subscription login of a user_oauth provider. Returns a code to show and the vendor page to enter it on; poll the returned flow until it leaves "pending". The linked login then serves every request the provider's policies allow, so its plan is shared by everyone they cover. Linking replaces the provider's current login. Requires permission to update providers.
+        Starts the subscription login of a user_oauth provider. Device flows return a code and vendor verification page; poll until approval. Authorization-code flows return authorization_uri; submit the vendor's returned code to the completion endpoint. The linked login then serves every request the provider's policies allow, so its plan is shared by everyone they cover. Linking replaces the provider's current login. Requires permission to update providers.
       tags: [ Agent Network ]
       security:
         - BearerAuth: [ ]
@@ -14213,9 +14232,64 @@ paths:
         '500':
           "$ref": "#/components/responses/internal_error"
   /api/agent-network/providers/{providerId}/link/{flowId}:
+    post:
+      summary: Complete an authorization-code subscription login
+      description: Exchanges the vendor's authorization result once, using the PKCE verifier held by management. The flow must belong to this provider and the user who started it. Requires permission to update providers and datastore encryption. Token material is never returned.
+      tags: [ Agent Network ]
+      security:
+        - BearerAuth: [ ]
+        - TokenAuth: [ ]
+      parameters:
+        - in: path
+          name: providerId
+          required: true
+          schema:
+            type: string
+          description: The unique identifier of an Agent Network provider
+        - in: path
+          name: flowId
+          required: true
+          schema:
+            type: string
+          description: The flow id returned when the login was started
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentNetworkProviderLinkCompletion'
+      responses:
+        '200':
+          description: The completed login flow
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentNetworkProviderLinkFlow'
+        '400':
+          "$ref": "#/components/responses/bad_request"
+        '401':
+          "$ref": "#/components/responses/requires_authentication"
+        '403':
+          "$ref": "#/components/responses/forbidden"
+        '404':
+          "$ref": "#/components/responses/not_found"
+        '412':
+          description: This server has no datastore encryption key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: The submitted code is malformed or does not match this login. The flow can be retried with the correct code.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          "$ref": "#/components/responses/internal_error"
     get:
       summary: Poll a subscription login
-      description: Returns the state of a login flow the caller started. The vendor is contacted at most once per interval, so polling faster returns the same answer. A flow started by another user reads as not found. Requires permission to update providers.
+      description: Returns the state of a login flow the caller started. Device flows contact the vendor at most once per interval. Authorization-code flows only read the stored outcome. A flow started by another user reads as not found. Requires permission to update providers.
       tags: [ Agent Network ]
       security:
         - BearerAuth: [ ]

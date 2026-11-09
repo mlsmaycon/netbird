@@ -88,6 +88,9 @@ type ProviderRoute struct {
 	// under it are served only by such routes, and these routes serve nothing
 	// else. A linked-login route without one is unreachable.
 	RequestPathPrefix string `json:"request_path_prefix,omitempty"`
+	// StripPathPrefix removes a NetBird routing namespace before forwarding.
+	// Empty preserves a vendor-native prefix such as ChatGPT's Codex path.
+	StripPathPrefix string `json:"strip_path_prefix,omitempty"`
 }
 
 // ModelPolicyRule is one authorising policy's contribution to what a caller

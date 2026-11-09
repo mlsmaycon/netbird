@@ -103,12 +103,13 @@ type Manager interface {
 	// backs the proxy's GetLLMProviderCredential RPC.
 	GetProviderCredentialAccess(ctx context.Context, accountID, providerID string) (*subscription.Access, error)
 
-	// StartProviderLink, PollProviderLink and UnlinkProvider manage the
+	// StartProviderLink, PollProviderLink, CompleteProviderLink and UnlinkProvider manage the
 	// subscription login linked to a user_oauth provider. They need
 	// permission to update providers; a flow can only be polled by the user
 	// who started it.
 	StartProviderLink(ctx context.Context, accountID, userID, providerID string) (*subscription.Flow, error)
 	PollProviderLink(ctx context.Context, accountID, userID, providerID, flowID string) (*subscription.Flow, error)
+	CompleteProviderLink(ctx context.Context, accountID, userID, providerID, flowID, code string) (*subscription.Flow, error)
 	UnlinkProvider(ctx context.Context, accountID, userID, providerID string) error
 }
 

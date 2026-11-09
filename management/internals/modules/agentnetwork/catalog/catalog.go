@@ -193,10 +193,19 @@ type OAuthFlow string
 const (
 	// OAuthFlowDevice is a device-code login completed server-side:
 	// management requests a user code, the user enters it on the vendor's
-	// page, and management polls for the result. It is the only flow a
-	// public client id restricted to loopback redirects can use from a
-	// server.
+	// page, and management polls for the result.
 	OAuthFlowDevice OAuthFlow = "device"
+	// OAuthFlowAuthorizationCode exchanges a code returned by the vendor,
+	// bound to a single login attempt using PKCE and state.
+	OAuthFlowAuthorizationCode OAuthFlow = "authorization_code"
+)
+
+// OAuthProtocol selects the vendor-specific token exchange and refresh rules.
+type OAuthProtocol string
+
+const (
+	OAuthProtocolOpenAI    OAuthProtocol = "openai"
+	OAuthProtocolAnthropic OAuthProtocol = "anthropic"
 )
 
 // OAuthProfile describes one vendor's subscription login and how its tokens
@@ -207,9 +216,16 @@ type OAuthProfile struct {
 	Issuer   string
 	ClientID string
 	Flow     OAuthFlow
+	// Protocol defaults to OpenAI for profiles created before it was explicit.
+	Protocol OAuthProtocol
 	// Scopes are requested by redirect flows. The device flow sends none: the
 	// vendor binds them to the client id.
 	Scopes []string
+	// AuthorizeURL and RedirectURI are fixed catalog endpoints for code flows.
+	// FlowTTL bounds the time allowed to finish a code flow.
+	AuthorizeURL string
+	RedirectURI  string
+	FlowTTL      time.Duration
 
 	// DeviceCodeURL issues a user code, DeviceTokenURL is polled until the
 	// user approves, and VerificationURI is where the user enters the code.
@@ -235,10 +251,14 @@ type OAuthProfile struct {
 	// and FedRAMPHeader is set to "true" for FedRAMP accounts.
 	AccountIDHeader string
 	FedRAMPHeader   string
-	// RequestPathPrefix is the request path this vendor's clients use. The
-	// router keeps requests under it on routes of this entry and keeps every
-	// other request off them, because the two upstreams serve different APIs.
+	// RequestPathPrefix selects this login's routes without competing with
+	// static-key providers that serve the same models.
 	RequestPathPrefix string
+	// StripPathPrefix removes a NetBird-only namespace before forwarding.
+	StripPathPrefix string
+	// RequestHeaders are fixed headers added with the access token. Client
+	// copies are stripped before these trusted values are injected.
+	RequestHeaders map[string]string
 }
 
 // ListingShape names the response envelope a vendor returns its model
@@ -478,6 +498,7 @@ var providers = []Provider{
 			Issuer:            "https://auth.openai.com",
 			ClientID:          "app_EMoamEEZ73f0CkXaXp7hrann",
 			Flow:              OAuthFlowDevice,
+			Protocol:          OAuthProtocolOpenAI,
 			Scopes:            []string{"openid", "profile", "email", "offline_access"},
 			DeviceCodeURL:     "https://auth.openai.com/api/accounts/deviceauth/usercode",
 			DeviceTokenURL:    "https://auth.openai.com/api/accounts/deviceauth/token",
@@ -493,6 +514,41 @@ var providers = []Provider{
 			FedRAMPHeader:     "X-OpenAI-Fedramp",
 			RequestPathPrefix: "/backend-api/codex",
 		},
+		Models: []Model{},
+	},
+	{
+		// NetBird's signed agreement with Anthropic permits holding Claude
+		// logins and provider-wide sharing, superseding the former catalog ban.
+		ID:                 "anthropic_claude_login",
+		Kind:               KindProvider,
+		Name:               "Anthropic (Claude login)",
+		Description:        "Claude on a subscription plan, shared through one linked login",
+		DefaultHost:        "api.anthropic.com",
+		AuthHeaderName:     "Authorization",
+		AuthHeaderTemplate: "Bearer ${API_KEY}",
+		DefaultContentType: "application/json",
+		BrandColor:         "#D97757",
+		ParserID:           "anthropic",
+		CredentialKind:     CredentialUserOAuth,
+		OAuth: &OAuthProfile{ //nolint:gosec // public client id and endpoints, no secret
+			Issuer:            "https://claude.ai",
+			ClientID:          "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+			Flow:              OAuthFlowAuthorizationCode,
+			Protocol:          OAuthProtocolAnthropic,
+			AuthorizeURL:      "https://claude.ai/oauth/authorize",
+			TokenURL:          "https://platform.claude.com/v1/oauth/token",
+			RedirectURI:       "https://platform.claude.com/oauth/code/callback",
+			VerificationURI:   "https://claude.ai/oauth/authorize",
+			Scopes:            []string{"user:profile", "user:inference", "user:sessions:claude_code"},
+			FlowTTL:           15 * time.Minute,
+			RequestPathPrefix: "/claude-login",
+			StripPathPrefix:   "/claude-login",
+			RequestHeaders: map[string]string{
+				"anthropic-version": "2023-06-01",
+				"anthropic-beta":    "oauth-2025-04-20",
+			},
+		},
+		// The plan carries usage charges, so API pricing does not apply.
 		Models: []Model{},
 	},
 	{
