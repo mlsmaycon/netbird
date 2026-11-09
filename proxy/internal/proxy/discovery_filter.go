@@ -99,13 +99,14 @@ func isPlainJSONListing(resp *http.Response) bool {
 
 // listingEnvelopes maps a listing's wrapper key to the field naming the model
 // id inside it. Vendors did not converge on one shape: OpenAI's is what
-// Anthropic adopted, while Bedrock returns inference-profile summaries under a
-// key of its own. A body matching none of these is forwarded untouched.
+// Anthropic adopted, Codex uses slugs, and Bedrock returns inference-profile
+// summaries. A body matching none of these is forwarded untouched.
 var listingEnvelopes = []struct {
 	key     string
 	idField string
 }{
 	{"data", "id"},
+	{"models", "slug"},
 	{"inferenceProfileSummaries", "inferenceProfileId"},
 }
 

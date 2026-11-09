@@ -89,7 +89,7 @@ func (m *managerImpl) GetProviderCredentialAccess(ctx context.Context, accountID
 // StartProviderLink starts linking a subscription login to a provider. It
 // needs permission to update providers: the login will serve everyone the
 // provider's policies cover.
-func (m *managerImpl) StartProviderLink(ctx context.Context, accountID, userID, providerID string) (*subscription.Flow, error) {
+func (m *managerImpl) StartProviderLink(ctx context.Context, accountID, userID, providerID string, requested ...catalog.OAuthFlow) (*subscription.Flow, error) {
 	if err := m.requirePermission(ctx, accountID, userID, modules.AgentNetworkProviders, operations.Update); err != nil {
 		return nil, err
 	}
@@ -99,6 +99,17 @@ func (m *managerImpl) StartProviderLink(ctx context.Context, accountID, userID, 
 	_, entry, err := m.linkTarget(ctx, accountID, providerID)
 	if err != nil {
 		return nil, err
+	}
+	if len(requested) > 1 {
+		return nil, status.Errorf(status.InvalidArgument, "only one login flow may be requested")
+	}
+	if len(requested) == 1 && requested[0] != "" {
+		if !entry.OAuth.SupportsFlow(requested[0]) {
+			return nil, linkError(subscription.ErrUnsupportedFlow)
+		}
+		profile := *entry.OAuth
+		profile.Flow = requested[0]
+		entry.OAuth = &profile
 	}
 	flow, err := m.subscriptions.StartLink(ctx, subscription.Key{AccountID: accountID, ProviderID: providerID}, userID, entry)
 	if err != nil {
@@ -224,7 +235,7 @@ func (m *managerImpl) linkStates(ctx context.Context, accountID string) (map[str
 }
 
 // StartProviderLink on the mock manager is not supported.
-func (*mockManager) StartProviderLink(_ context.Context, _, _, _ string) (*subscription.Flow, error) {
+func (*mockManager) StartProviderLink(_ context.Context, _, _, _ string, _ ...catalog.OAuthFlow) (*subscription.Flow, error) {
 	return nil, ErrProviderNotLinkable
 }
 

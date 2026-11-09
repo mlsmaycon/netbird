@@ -119,6 +119,24 @@ func (e AgentNetworkCatalogSubscriptionLoginFlow) Valid() bool {
 	}
 }
 
+// Defines values for AgentNetworkCatalogSubscriptionLoginSupportedFlows.
+const (
+	AgentNetworkCatalogSubscriptionLoginSupportedFlowsAuthorizationCode AgentNetworkCatalogSubscriptionLoginSupportedFlows = "authorization_code"
+	AgentNetworkCatalogSubscriptionLoginSupportedFlowsDevice            AgentNetworkCatalogSubscriptionLoginSupportedFlows = "device"
+)
+
+// Valid indicates whether the value is a known member of the AgentNetworkCatalogSubscriptionLoginSupportedFlows enum.
+func (e AgentNetworkCatalogSubscriptionLoginSupportedFlows) Valid() bool {
+	switch e {
+	case AgentNetworkCatalogSubscriptionLoginSupportedFlowsAuthorizationCode:
+		return true
+	case AgentNetworkCatalogSubscriptionLoginSupportedFlowsDevice:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentNetworkConsumptionDimensionKind.
 const (
 	AgentNetworkConsumptionDimensionKindGroup AgentNetworkConsumptionDimensionKind = "group"
@@ -197,6 +215,24 @@ func (e AgentNetworkProviderLinkFlowStatus) Valid() bool {
 	case AgentNetworkProviderLinkFlowStatusLinked:
 		return true
 	case AgentNetworkProviderLinkFlowStatusPending:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentNetworkProviderLinkStartFlow.
+const (
+	AgentNetworkProviderLinkStartFlowAuthorizationCode AgentNetworkProviderLinkStartFlow = "authorization_code"
+	AgentNetworkProviderLinkStartFlowDevice            AgentNetworkProviderLinkStartFlow = "device"
+)
+
+// Valid indicates whether the value is a known member of the AgentNetworkProviderLinkStartFlow enum.
+func (e AgentNetworkProviderLinkStartFlow) Valid() bool {
+	switch e {
+	case AgentNetworkProviderLinkStartFlowAuthorizationCode:
+		return true
+	case AgentNetworkProviderLinkStartFlowDevice:
 		return true
 	default:
 		return false
@@ -2261,6 +2297,9 @@ type AgentNetworkCatalogSubscriptionLogin struct {
 	// "authorization_code" — the user opens authorization_uri from the started flow and submits the returned code to complete it.
 	Flow AgentNetworkCatalogSubscriptionLoginFlow `json:"flow"`
 
+	// SupportedFlows Explicitly supported login interactions, including the default flow. When omitted, only flow is supported. Clients must not offer alternatives absent from this list.
+	SupportedFlows *[]AgentNetworkCatalogSubscriptionLoginSupportedFlows `json:"supported_flows,omitempty"`
+
 	// VerificationUri The vendor page where the user enters their code.
 	VerificationUri string `json:"verification_uri"`
 }
@@ -2268,6 +2307,9 @@ type AgentNetworkCatalogSubscriptionLogin struct {
 // AgentNetworkCatalogSubscriptionLoginFlow "device" — the user enters a short code on the vendor's page (verification_uri) and the dashboard polls until they approve.
 // "authorization_code" — the user opens authorization_uri from the started flow and submits the returned code to complete it.
 type AgentNetworkCatalogSubscriptionLoginFlow string
+
+// AgentNetworkCatalogSubscriptionLoginSupportedFlows defines model for AgentNetworkCatalogSubscriptionLogin.SupportedFlows.
+type AgentNetworkCatalogSubscriptionLoginSupportedFlows string
 
 // AgentNetworkConsumption One per-(dimension, window) consumption counter row. The proxy ticks one row per dimension on every served LLM request; the dashboard reads this listing to surface live counter growth.
 type AgentNetworkConsumption struct {
@@ -2560,7 +2602,7 @@ type AgentNetworkProvider struct {
 	UpstreamUrl string `json:"upstream_url"`
 }
 
-// AgentNetworkProviderLinkCompletion The authorization result pasted from the vendor's code page. Consumed once and bound to the caller and provider that started the flow.
+// AgentNetworkProviderLinkCompletion The authorization result pasted from the vendor. Claude accepts its complete code and state; ChatGPT browser login requires the full registered loopback callback URL, including code and state. Consumed once and bound to the caller and provider that started the flow.
 type AgentNetworkProviderLinkCompletion struct {
 	// Code The complete code and state returned by the vendor, or the registered callback URL containing both.
 	Code string `json:"code"`
@@ -2604,6 +2646,15 @@ type AgentNetworkProviderLinkFlowFlow string
 // "expired" — the code expired before approval; start a new flow.
 // "failed" — the vendor refused the login; start a new flow.
 type AgentNetworkProviderLinkFlowStatus string
+
+// AgentNetworkProviderLinkStart Optional choice of login interaction. Omit this body or flow to use the catalog default.
+type AgentNetworkProviderLinkStart struct {
+	// Flow Must be supported by this provider's catalog subscription_login. Browser login uses authorization_code.
+	Flow *AgentNetworkProviderLinkStartFlow `json:"flow,omitempty"`
+}
+
+// AgentNetworkProviderLinkStartFlow Must be supported by this provider's catalog subscription_login. Browser login uses authorization_code.
+type AgentNetworkProviderLinkStartFlow string
 
 // AgentNetworkProviderModel A model exposed by the provider, with the operator's per-1k input/output prices in USD.
 type AgentNetworkProviderModel struct {
@@ -6450,6 +6501,9 @@ type PostApiAgentNetworkProvidersJSONRequestBody = AgentNetworkProviderRequest
 
 // PutApiAgentNetworkProvidersProviderIdJSONRequestBody defines body for PutApiAgentNetworkProvidersProviderId for application/json ContentType.
 type PutApiAgentNetworkProvidersProviderIdJSONRequestBody = AgentNetworkProviderRequest
+
+// PostApiAgentNetworkProvidersProviderIdLinkJSONRequestBody defines body for PostApiAgentNetworkProvidersProviderIdLink for application/json ContentType.
+type PostApiAgentNetworkProvidersProviderIdLinkJSONRequestBody = AgentNetworkProviderLinkStart
 
 // PostApiAgentNetworkProvidersProviderIdLinkFlowIdJSONRequestBody defines body for PostApiAgentNetworkProvidersProviderIdLinkFlowId for application/json ContentType.
 type PostApiAgentNetworkProvidersProviderIdLinkFlowIdJSONRequestBody = AgentNetworkProviderLinkCompletion

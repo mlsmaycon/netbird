@@ -51,10 +51,14 @@ func (openAIProtocol) claims(prof *catalog.OAuthProfile, tokens *TokenSet) (Acco
 }
 
 func (openAIProtocol) expiry(tokens *TokenSet, now time.Time) time.Time {
-	return accessExpiry(tokens.AccessToken, now)
+	if tokens.ExpiresIn > 0 {
+		return now.Add(tokens.ExpiresIn)
+	}
+	expiresAt, _ := AccessTokenExpiry(tokens.AccessToken)
+	return expiresAt
 }
 
-func (openAIProtocol) uncertainRefreshIsTerminal() bool { return false }
+func (openAIProtocol) uncertainRefreshIsTerminal() bool { return true }
 
 type anthropicProtocol struct{}
 
@@ -138,7 +142,7 @@ func decodeAnthropicTokens(body []byte) (*TokenSet, error) {
 }
 
 func authorizationURL(prof *catalog.OAuthProfile, state, challenge string) (string, error) {
-	if prof.Protocol != catalog.OAuthProtocolAnthropic || prof.Flow != catalog.OAuthFlowAuthorizationCode {
+	if _, err := protocolFor(prof); err != nil || prof.Flow != catalog.OAuthFlowAuthorizationCode {
 		return "", ErrUnsupportedFlow
 	}
 	u, err := url.Parse(prof.AuthorizeURL)
@@ -148,7 +152,13 @@ func authorizationURL(prof *catalog.OAuthProfile, state, challenge string) (stri
 	query := u.Query()
 	query.Set("client_id", prof.ClientID)
 	query.Set("response_type", "code")
-	query.Set("code", "true")
+	if prof.Protocol == catalog.OAuthProtocolAnthropic {
+		query.Set("code", "true")
+	} else {
+		query.Set("prompt", "login")
+		query.Set("id_token_add_organizations", "true")
+		query.Set("codex_cli_simplified_flow", "true")
+	}
 	query.Set("redirect_uri", prof.RedirectURI)
 	query.Set("scope", strings.Join(prof.Scopes, " "))
 	query.Set("state", state)

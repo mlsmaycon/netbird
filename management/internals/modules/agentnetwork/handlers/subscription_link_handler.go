@@ -8,6 +8,7 @@ import (
 
 	"github.com/gorilla/mux"
 
+	"github.com/netbirdio/netbird/management/internals/modules/agentnetwork/catalog"
 	"github.com/netbirdio/netbird/management/internals/modules/agentnetwork/subscription"
 	nbcontext "github.com/netbirdio/netbird/management/server/context"
 	"github.com/netbirdio/netbird/shared/auth"
@@ -63,7 +64,26 @@ func (h *handler) startProviderLink(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	flow, err := h.manager.StartProviderLink(r.Context(), userAuth.AccountId, userAuth.UserId, providerID)
+	var body api.AgentNetworkProviderLinkStart
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil && err != io.EOF {
+		util.WriteError(r.Context(), status.Errorf(status.InvalidArgument, "invalid login flow request"), w)
+		return
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		util.WriteError(r.Context(), status.Errorf(status.InvalidArgument, "invalid login flow request"), w)
+		return
+	}
+	var requested catalog.OAuthFlow
+	if body.Flow != nil {
+		requested = catalog.OAuthFlow(*body.Flow)
+		if requested != catalog.OAuthFlowDevice && requested != catalog.OAuthFlowAuthorizationCode {
+			util.WriteError(r.Context(), status.Errorf(status.InvalidArgument, "unsupported login flow"), w)
+			return
+		}
+	}
+	flow, err := h.manager.StartProviderLink(r.Context(), userAuth.AccountId, userAuth.UserId, providerID, requested)
 	if err != nil {
 		util.WriteError(r.Context(), err, w)
 		return

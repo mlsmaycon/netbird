@@ -72,18 +72,23 @@ func (s *Service) CompleteLink(ctx context.Context, key Key, startedBy, flowID, 
 		return nil, errNoFlowCache
 	}
 	protocol, err := protocolFor(entry.OAuth)
-	if err != nil || entry.OAuth.Flow != catalog.OAuthFlowAuthorizationCode {
+	if err != nil || !entry.OAuth.SupportsFlow(catalog.OAuthFlowAuthorizationCode) {
 		return nil, ErrUnsupportedFlow
 	}
 	flow, err := s.loadFlow(ctx, flowID)
 	if err != nil {
 		return nil, err
 	}
-	if flow.Key != key || flow.StartedBy != startedBy || flow.ProviderType != entry.ID || flow.Flow != entry.OAuth.Flow {
+	if flow.Key != key || flow.StartedBy != startedBy || flow.ProviderType != entry.ID || flow.Flow != catalog.OAuthFlowAuthorizationCode {
 		return nil, ErrFlowNotFound
 	}
 	if !s.now().Before(flow.ExpiresAt) {
 		return flow.view(flowID, FlowExpired), nil
+	}
+	// OpenAI's loopback redirect returns a URL; requiring it binds the callback
+	// to the registered origin as well as the random state.
+	if entry.OAuth.Protocol != catalog.OAuthProtocolAnthropic && !strings.Contains(result, "://") {
+		return nil, ErrInvalidAuthorizationCode
 	}
 	code, state, err := parseAuthorizationResult(result, entry.OAuth.RedirectURI)
 	if err != nil || subtle.ConstantTimeCompare([]byte(state), []byte(flow.AuthorizationState)) != 1 {
@@ -96,7 +101,13 @@ func (s *Service) CompleteLink(ctx context.Context, key Key, startedBy, flowID, 
 	if !found || verifier == "" {
 		return nil, ErrFlowNotFound
 	}
-	tokens, exchangeErr := protocol.exchange(ctx, s.client, entry.OAuth, code, verifier, state)
+	profile := *entry.OAuth
+	profile.Flow = catalog.OAuthFlowAuthorizationCode
+	// The verifier cannot be recovered after consumption. Finish this exchange
+	// even if the dashboard disconnects while the vendor is redeeming the code.
+	exchangeCtx, exchangeCancel := context.WithTimeout(context.WithoutCancel(ctx), httpTimeout)
+	defer exchangeCancel()
+	tokens, exchangeErr := protocol.exchange(exchangeCtx, s.client, &profile, code, verifier, state)
 	// Once redeemed, cancellation must not prevent storing the returned login.
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), httpTimeout)
 	defer cancel()

@@ -77,6 +77,14 @@ while adding it: NetBird shows a short code to enter at
 `https://auth.openai.com/codex/device`, and the form finishes once they
 approve. OpenAI has authorised NetBird to hold these logins.
 
+If device authorization is unavailable, choose **Use browser sign-in**. After
+approving in the browser, copy the complete
+`http://localhost:1455/auth/callback?...` URL from its address bar and paste it
+into NetBird, even if the browser says it cannot connect. No callback server,
+client ID, client secret, or dashboard domain registration is required. The
+management server holds the PKCE verifier and accepts the callback only for
+the administrator and login attempt that started it.
+
 The linked login is shared: every request the provider's policies allow,
 from any user or machine they cover, goes to OpenAI under that one ChatGPT
 plan and counts against its usage limits. What NetBird adds is the view of
@@ -88,6 +96,9 @@ because OpenAI ends a login whose refresh token is used twice. The proxy
 receives short-lived access tokens, and agents never receive any ChatGPT
 credential. Usage on this provider is recorded in tokens but not priced at
 API rates, since it is billed to the plan.
+Refreshes use the token endpoint's lifetime for opaque access tokens. An
+uncertain refresh outcome requires linking again so a possibly consumed
+refresh token is never automatically replayed.
 
 Point Codex at the endpoint in `~/.codex/config.toml`. Codex ignores provider
 settings in a project-level config, so they must go in the user's own file:
@@ -109,6 +120,11 @@ the machine's own local ChatGPT token to the endpoint.
 Until a login is linked, or after OpenAI stops refreshing it, requests are
 refused with `llm_policy.credential_not_linked`, and the provider shows the
 login as not linked or needing to be linked again.
+The `/backend-api/codex` route cannot fall back to an API-key provider. Native
+Codex model listings preserve capability metadata and filter known models to
+those allowed by the caller's policies. HTTP responses and streaming are
+supported; WebSocket upgrades are rejected because the proxy cannot yet
+enforce model policies and usage limits on each WebSocket message.
 
 ## Claude on a subscription plan
 

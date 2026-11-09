@@ -218,6 +218,9 @@ type OAuthProfile struct {
 	Flow     OAuthFlow
 	// Protocol defaults to OpenAI for profiles created before it was explicit.
 	Protocol OAuthProtocol
+	// SupportedFlows lists explicitly supported alternatives to Flow, including
+	// the default. Empty means only Flow is supported.
+	SupportedFlows []OAuthFlow
 	// Scopes are requested by redirect flows. The device flow sends none: the
 	// vendor binds them to the client id.
 	Scopes []string
@@ -259,6 +262,22 @@ type OAuthProfile struct {
 	// RequestHeaders are fixed headers added with the access token. Client
 	// copies are stripped before these trusted values are injected.
 	RequestHeaders map[string]string
+}
+
+// SupportsFlow reports whether this profile can start or resume a login flow.
+func (p *OAuthProfile) SupportsFlow(flow OAuthFlow) bool {
+	if p == nil || flow == "" {
+		return false
+	}
+	if flow == p.Flow {
+		return true
+	}
+	for _, supported := range p.SupportedFlows {
+		if supported == flow {
+			return true
+		}
+	}
+	return false
 }
 
 // ListingShape names the response envelope a vendor returns its model
@@ -479,8 +498,9 @@ var providers = []Provider{
 		// ChatGPT login to the provider (OpenAI has authorised this for
 		// NetBird); management holds it and the proxy presents it upstream
 		// for every request the provider's policies allow, so no API key
-		// exists. Codex's public client id only accepts loopback redirects,
-		// hence the device flow.
+		// exists. Device login is the default. Browser login uses a pinned
+		// loopback callback pasted back into the dashboard, so self-hosters
+		// need neither client registration nor a local callback listener.
 		ID:                 "chatgpt_codex",
 		Kind:               KindProvider,
 		Name:               "OpenAI (ChatGPT login)",
@@ -499,6 +519,10 @@ var providers = []Provider{
 			ClientID:          "app_EMoamEEZ73f0CkXaXp7hrann",
 			Flow:              OAuthFlowDevice,
 			Protocol:          OAuthProtocolOpenAI,
+			SupportedFlows:    []OAuthFlow{OAuthFlowDevice, OAuthFlowAuthorizationCode},
+			AuthorizeURL:      "https://auth.openai.com/oauth/authorize",
+			RedirectURI:       "http://localhost:1455/auth/callback",
+			FlowTTL:           15 * time.Minute,
 			Scopes:            []string{"openid", "profile", "email", "offline_access"},
 			DeviceCodeURL:     "https://auth.openai.com/api/accounts/deviceauth/usercode",
 			DeviceTokenURL:    "https://auth.openai.com/api/accounts/deviceauth/token",
@@ -1204,6 +1228,13 @@ func (p Provider) ToAPIResponse() api.AgentNetworkCatalogProvider {
 		resp.SubscriptionLogin = &api.AgentNetworkCatalogSubscriptionLogin{
 			Flow:            api.AgentNetworkCatalogSubscriptionLoginFlow(p.OAuth.Flow),
 			VerificationUri: p.OAuth.VerificationURI,
+		}
+		if len(p.OAuth.SupportedFlows) > 0 {
+			flows := make([]api.AgentNetworkCatalogSubscriptionLoginSupportedFlows, 0, len(p.OAuth.SupportedFlows))
+			for _, flow := range p.OAuth.SupportedFlows {
+				flows = append(flows, api.AgentNetworkCatalogSubscriptionLoginSupportedFlows(flow))
+			}
+			resp.SubscriptionLogin.SupportedFlows = &flows
 		}
 	}
 	if len(p.ExtraHeaders) > 0 {

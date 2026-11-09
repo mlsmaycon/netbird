@@ -56,10 +56,15 @@ func (u *chatgptUpstream) RoundTrip(r *http.Request) (*http.Response, error) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		_ = r.Body.Close()
 	}
+	body, contentType := u.body, "text/event-stream"
+	if r.URL.Path == "/backend-api/codex/models" {
+		body = `{"models":[{"slug":"gpt-5.5","display_name":"GPT-5.5","context_window":272000},{"slug":"gpt-5.4","display_name":"GPT-5.4"}]}`
+		contentType = "application/json"
+	}
 	return &http.Response{
 		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-		Body:       io.NopCloser(strings.NewReader(u.body)),
+		Header:     http.Header{"Content-Type": []string{contentType}},
+		Body:       io.NopCloser(strings.NewReader(body)),
 		Request:    r,
 	}, nil
 }
@@ -151,6 +156,13 @@ func TestReverseProxy_AgentNetworkSubscription_FullChain(t *testing.T) {
 	require.NoError(t, st.SaveAgentNetworkPolicy(ctx, &agentNetworkTypes.Policy{
 		ID: "pol-codex", AccountID: accountID, Name: "codex", Enabled: true,
 		SourceGroups: []string{groupID}, DestinationProviderIDs: []string{providerID},
+		GuardrailIDs: []string{"guard-codex"},
+	}))
+	require.NoError(t, st.SaveAgentNetworkGuardrail(ctx, &agentNetworkTypes.Guardrail{
+		ID: "guard-codex", AccountID: accountID, Name: "Codex models",
+		Checks: agentNetworkTypes.GuardrailChecks{
+			ModelAllowlist: agentNetworkTypes.GuardrailModelAllowlist{Enabled: true, Models: []string{"gpt-5.5"}},
+		},
 	}))
 	anMgr := agentnetwork.NewManager(st, nil, nil, nil, agentnetwork.WithCatalogLookup(lookup))
 	server := &mgmtgrpc.ProxyServiceServer{}
@@ -197,15 +209,22 @@ func TestReverseProxy_AgentNetworkSubscription_FullChain(t *testing.T) {
 		}},
 	})
 
-	send := func(user string) (*httptest.ResponseRecorder, *proxy.CapturedData) {
+	sendRequest := func(user, method, path string, headers http.Header) (*httptest.ResponseRecorder, *proxy.CapturedData) {
 		body := `{"model":"gpt-5.5","stream":true,"store":false,"input":[{"role":"user","content":[{"type":"input_text","text":"hi"}]}]}`
-		req := httptest.NewRequest("POST", "https://"+synthSvc.Domain+"/backend-api/codex/responses", strings.NewReader(body))
+		if method == http.MethodGet {
+			body = ""
+		}
+		req := httptest.NewRequest(method, "https://"+synthSvc.Domain+path, strings.NewReader(body))
 		req.Host = synthSvc.Domain
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept-Encoding", "gzip, deflate")
 		// What a client must not be able to choose: its own bearer and the
 		// ChatGPT account its request acts for.
 		req.Header.Set("Authorization", "Bearer nb-agent-key")
 		req.Header.Set("chatgpt-account-id", "someone-elses-account")
+		for name, values := range headers {
+			req.Header[name] = append([]string(nil), values...)
+		}
 		cd := proxy.NewCapturedData("req-" + user)
 		cd.SetServiceID(nbproxytypes.ServiceID(synthSvc.ID))
 		cd.SetAccountID(nbproxytypes.AccountID(accountID))
@@ -218,6 +237,9 @@ func TestReverseProxy_AgentNetworkSubscription_FullChain(t *testing.T) {
 		w := httptest.NewRecorder()
 		rp.ServeHTTP(w, req)
 		return w, cd
+	}
+	send := func(user string) (*httptest.ResponseRecorder, *proxy.CapturedData) {
+		return sendRequest(user, http.MethodPost, "/backend-api/codex/responses", nil)
 	}
 
 	// Nothing linked yet: refused before reaching the vendor.
@@ -266,6 +288,40 @@ func TestReverseProxy_AgentNetworkSubscription_FullChain(t *testing.T) {
 	assert.Equal(t, "Bearer "+freshAccess, upstream.last(t).Header.Get("Authorization"))
 	assert.Equal(t, int32(1), refreshes.Load())
 	assert.Equal(t, "subscription", cd.GetMetadata()["llm.billing_mode"])
+
+	w, cd = sendRequest(userID, http.MethodGet, "/backend-api/codex/models?client_version=0.154.0", nil)
+	require.Equal(t, http.StatusOK, w.Code, "native model discovery must remain available: %s", w.Body.String())
+	var models struct {
+		Models []struct {
+			Slug          string `json:"slug"`
+			ContextWindow int    `json:"context_window"`
+		} `json:"models"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &models))
+	require.Len(t, models.Models, 1, "the stored policy must bound native Codex model discovery")
+	assert.Equal(t, "gpt-5.5", models.Models[0].Slug, "the permitted model remains discoverable")
+	assert.Equal(t, 272000, models.Models[0].ContextWindow, "the native capability metadata must survive filtering")
+	assert.Equal(t, "client_version=0.154.0", upstream.last(t).URL.RawQuery, "the vendor must receive the native client version")
+	assert.Equal(t, "identity", upstream.last(t).Header.Get("Accept-Encoding"), "model filtering must not be bypassed by compression negotiation")
+	assert.Equal(t, "true", cd.GetMetadata()[middleware.KeyLLMNonInference], "discovery must not consume inference limits")
+
+	for _, path := range []string{"/backend-api/codex/responses", "/backend-api/codex/models"} {
+		upstream.mu.Lock()
+		before := len(upstream.reqs)
+		upstream.mu.Unlock()
+		w, _ = sendRequest(userID, http.MethodGet, path, http.Header{
+			"Upgrade": {"websocket"}, "Connection": {"keep-alive, Upgrade"},
+		})
+		assert.Equal(t, http.StatusBadRequest, w.Code, "unmetered WebSocket frames must not enter the subscription route")
+		assert.Contains(t, w.Body.String(), "llm_policy.unsupported_transport", "the client must receive an explicit transport error")
+		assert.Contains(t, w.Body.String(), "HTTP streaming", "the client must be directed to the supported transport")
+		upstream.mu.Lock()
+		assert.Len(t, upstream.reqs, before, "rejected upgrades must not reach ChatGPT")
+		upstream.mu.Unlock()
+	}
+	w, _ = send(userID)
+	require.Equal(t, http.StatusOK, w.Code, "ordinary HTTP streaming must continue after discovery and rejected upgrades")
+	assert.Equal(t, "gzip, deflate", upstream.last(t).Header.Get("Accept-Encoding"), "discovery headers must not mutate the cached credential headers")
 }
 
 func subscriptionChainSpecs(t *testing.T, svc *rpservice.Service) []middleware.Spec {

@@ -121,3 +121,58 @@ func TestClaudeProviderLink_CompletionEndpoint(t *testing.T) {
 	rec = f.do(t, http.MethodGet, completePath, "")
 	require.Equal(t, http.StatusOK, rec.Code, "polling a completed login remains possible")
 }
+
+func TestCodexProviderLink_SelectBrowserOrDefaultDevice(t *testing.T) {
+	var deviceRequests atomic.Int32
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		deviceRequests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"device_auth_id":"device","user_code":"ABCD-1234","interval":1}`))
+	}))
+	t.Cleanup(issuer.Close)
+	f := newAgentNetworkHandlerFixture(t, agentnetwork.WithCatalogLookup(func(id string) (catalog.Provider, bool) {
+		entry, ok := catalog.Lookup(id)
+		if ok && id == "chatgpt_codex" {
+			profile := *entry.OAuth
+			profile.DeviceCodeURL = issuer.URL
+			entry.OAuth = &profile
+		}
+		return entry, ok
+	}))
+	key, err := crypt.GenerateKey()
+	require.NoError(t, err)
+	encryptor, err := crypt.NewFieldEncrypt(key)
+	require.NoError(t, err)
+	f.store.SetFieldEncrypt(encryptor)
+	rec := f.do(t, http.MethodPost, "/agent-network/providers", `{"provider_id":"chatgpt_codex","name":"Codex","upstream_url":"https://chatgpt.com","enabled":true}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var provider api.AgentNetworkProvider
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &provider))
+	path := "/agent-network/providers/" + provider.Id + "/link"
+	for _, body := range []string{"", `{}`, `{"flow":"device"}`} {
+		rec = f.do(t, http.MethodPost, path, body)
+		require.Equal(t, http.StatusOK, rec.Code, "legacy and explicit device requests should work: %s", rec.Body.String())
+		var flow api.AgentNetworkProviderLinkFlow
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &flow))
+		require.NotNil(t, flow.Flow)
+		assert.Equal(t, api.AgentNetworkProviderLinkFlowFlowDevice, *flow.Flow)
+	}
+	assert.Equal(t, int32(3), deviceRequests.Load())
+	rec = f.do(t, http.MethodPost, path, `{"flow":"authorization_code"}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var flow api.AgentNetworkProviderLinkFlow
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &flow))
+	require.NotNil(t, flow.Flow)
+	assert.Equal(t, api.AgentNetworkProviderLinkFlowFlowAuthorizationCode, *flow.Flow)
+	require.NotNil(t, flow.AuthorizationUri)
+	authorize, err := url.Parse(*flow.AuthorizationUri)
+	require.NoError(t, err)
+	assert.Equal(t, "auth.openai.com", authorize.Host)
+	assert.Equal(t, "http://localhost:1455/auth/callback", authorize.Query().Get("redirect_uri"))
+	assert.Equal(t, int32(3), deviceRequests.Load(), "browser sign-in must work independently of device code issuance")
+	for _, body := range []string{`{"flow":"invalid"}`, `{"flow":""}`, `{"unknown":true}`, `{`, `{} {}`, strings.Repeat(" ", 1025)} {
+		rec = f.do(t, http.MethodPost, path, body)
+		assert.Equal(t, http.StatusUnprocessableEntity, rec.Code, "invalid flow request must be rejected: %s", body)
+	}
+	assert.Equal(t, int32(3), deviceRequests.Load(), "invalid requests cannot contact the issuer")
+}

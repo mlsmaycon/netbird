@@ -5714,6 +5714,12 @@ components:
             "authorization_code" — the user opens authorization_uri from the started flow and submits the returned code to complete it.
           enum: [device, authorization_code]
           example: "device"
+        supported_flows:
+          type: array
+          description: Explicitly supported login interactions, including the default flow. When omitted, only flow is supported. Clients must not offer alternatives absent from this list.
+          items:
+            type: string
+            enum: [device, authorization_code]
         verification_uri:
           type: string
           description: The vendor page where the user enters their code.
@@ -5798,9 +5804,17 @@ components:
         - verification_uri
         - expires_at
         - interval_seconds
+    AgentNetworkProviderLinkStart:
+      type: object
+      description: Optional choice of login interaction. Omit this body or flow to use the catalog default.
+      properties:
+        flow:
+          type: string
+          enum: [device, authorization_code]
+          description: Must be supported by this provider's catalog subscription_login. Browser login uses authorization_code.
     AgentNetworkProviderLinkCompletion:
       type: object
-      description: The authorization result pasted from the vendor's code page. Consumed once and bound to the caller and provider that started the flow.
+      description: The authorization result pasted from the vendor. Claude accepts its complete code and state; ChatGPT browser login requires the full registered loopback callback URL, including code and state. Consumed once and bound to the caller and provider that started the flow.
       properties:
         code:
           type: string
@@ -14169,7 +14183,7 @@ paths:
     post:
       summary: Start linking the provider's subscription
       description: |
-        Starts the subscription login of a user_oauth provider. Device flows return a code and vendor verification page; poll until approval. Authorization-code flows return authorization_uri; submit the vendor's returned code to the completion endpoint. The linked login then serves every request the provider's policies allow, so its plan is shared by everyone they cover. Linking replaces the provider's current login. Requires permission to update providers.
+        Starts the subscription login of a user_oauth provider. Omit the body or flow to keep the catalog default; alternatives must be advertised in subscription_login.supported_flows. Device flows return a code and vendor verification page; poll until approval. Authorization-code flows return authorization_uri; submit the vendor's returned code or registered callback URL to the completion endpoint. The linked login then serves every request the provider's policies allow, so its plan is shared by everyone they cover. Linking replaces the provider's current login. Requires permission to update providers.
       tags: [ Agent Network ]
       security:
         - BearerAuth: [ ]
@@ -14181,6 +14195,12 @@ paths:
           schema:
             type: string
           description: The unique identifier of an Agent Network provider
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentNetworkProviderLinkStart'
       responses:
         '200':
           description: The started login flow
@@ -14198,6 +14218,12 @@ paths:
           "$ref": "#/components/responses/not_found"
         '412':
           description: The vendor has device login turned off, or this server cannot hold subscription logins (no datastore encryption key).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: The request is malformed or the requested login flow is not supported by this provider.
           content:
             application/json:
               schema:

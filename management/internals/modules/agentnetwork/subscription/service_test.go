@@ -218,6 +218,8 @@ func TestDeviceFlow_LinksAfterApproval(t *testing.T) {
 	assert.Equal(t, FlowPending, got.Status, "a 403 from the vendor means the user has not approved yet")
 
 	clock = clock.Add(2 * time.Second)
+	// Advance the real cache's throttle together with the service's fake clock.
+	require.NoError(t, svc.cache.Delete(ctx, flowKeyPrefix+flow.ID+devicePollSuffix))
 	got, err = svc.PollLink(ctx, testKey, testAdmin, flow.ID, issuer.entry())
 	require.NoError(t, err)
 	assert.Equal(t, FlowLinked, got.Status)
@@ -357,7 +359,7 @@ func TestAccess_PermanentFailureNeedsRelink(t *testing.T) {
 	assert.Equal(t, int32(1), issuer.refreshCalls.Load(), "a dead login should not be retried upstream")
 }
 
-func TestAccess_TransientFailureKeepsUsableToken(t *testing.T) {
+func TestAccess_UnknownServerFailureRequiresRelink(t *testing.T) {
 	issuer := newFakeIssuer(t)
 	issuer.refreshFail = func(w http.ResponseWriter) bool {
 		w.WriteHeader(http.StatusBadGateway)
@@ -367,14 +369,14 @@ func TestAccess_TransientFailureKeepsUsableToken(t *testing.T) {
 	seedCredential(t, s, time.Now().Add(2*time.Minute))
 	svc := NewService(s, newTestCache(t), nil)
 
-	access, err := svc.Access(context.Background(), testKey, issuer.entry())
-	require.NoError(t, err, "a token that has not expired yet should still be served")
-	assert.Equal(t, "Bearer old-access", access.Headers[0].Value)
+	_, err := svc.Access(context.Background(), testKey, issuer.entry())
+	assert.ErrorIs(t, err, ErrRelinkRequired, "a gateway failure may follow successful redemption of the refresh token")
 
 	cred, err := s.GetAgentNetworkProviderCredential(context.Background(), testKey.AccountID, testKey.ProviderID)
 	require.NoError(t, err)
-	assert.Equal(t, types.CredentialActive, cred.Status, "a transient failure must not mark the login dead")
-	assert.Nil(t, cred.RefreshLeaseUntil, "the lease should be released for the next attempt")
+	assert.Equal(t, types.CredentialNeedsRelink, cred.Status, "the uncertain result must prevent further redemption attempts")
+	assert.Empty(t, cred.RefreshToken, "a possibly consumed token must not survive the failure")
+	assert.Nil(t, cred.RefreshLeaseUntil, "the terminal state should release the refresh lease")
 }
 
 func TestAccess_NotLinked(t *testing.T) {

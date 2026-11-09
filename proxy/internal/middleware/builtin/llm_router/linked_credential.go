@@ -19,6 +19,10 @@ import (
 const (
 	// claudeLoginPathPrefix is reserved even when the linked route is absent.
 	claudeLoginPathPrefix = "/claude-login"
+	codexLoginPathPrefix  = "/backend-api/codex"
+	codexModelListingPath = codexLoginPathPrefix + "/models"
+
+	denyCodeUnsupportedTransport = "llm_policy.unsupported_transport"
 
 	//nolint:gosec // deny code label, not a credential
 	denyCodeCredentialNotLinked = "llm_policy.credential_not_linked"
@@ -145,6 +149,10 @@ func (m *Middleware) linkedHeaders(ctx context.Context, accountID, providerID st
 		failure credentialFailure
 	}
 	v, _, _ := m.creds.flight.Do(accountID+"\x00"+providerID, func() (any, error) {
+		// A previous flight may have filled the cache after this caller's miss.
+		if headers, ok := m.creds.get(key); ok {
+			return result{headers: headers}, nil
+		}
 		// Detached from the request so one caller giving up does not fail
 		// the others waiting on the same lookup.
 		rpcCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), credentialRPCTimeout)
@@ -212,8 +220,14 @@ func (m *Middleware) linkedRoutesFor(reqPath string) []ProviderRoute {
 // picks a route by model among those routes only, then attaches the
 // provider's linked login. Every failure to obtain it denies.
 func (m *Middleware) routeLinkedCredential(ctx context.Context, in *middleware.Input, routes []ProviderRoute, reqPath, surface, model string) *middleware.Output {
+	if hasTransportUpgrade(in.Headers) {
+		if surface == "" && len(routes) > 0 {
+			surface = routes[0].Vendor
+		}
+		return denySubscriptionUpgrade(surface)
+	}
 	readPath := linkedReadPath(routes, reqPath, in.Method)
-	if isModelLessPath(readPath) {
+	if isLinkedModelLessPath(readPath) {
 		return m.routeLinkedModelless(ctx, in, routes, reqPath, surface)
 	}
 	detail, _ := modelDetailID(readPath)
@@ -262,11 +276,15 @@ func linkedReadPath(routes []ProviderRoute, reqPath, method string) string {
 	}
 	for _, route := range routes {
 		nativePath := linkedNativePath(route, reqPath)
-		if _, detail := modelDetailID(nativePath); detail || isModelLessPath(nativePath) {
+		if _, detail := modelDetailID(nativePath); detail || isLinkedModelLessPath(nativePath) {
 			return nativePath
 		}
 	}
 	return ""
+}
+
+func isLinkedModelLessPath(nativePath string) bool {
+	return isModelLessPath(nativePath) || nativePath == codexModelListingPath
 }
 
 func (m *Middleware) routeLinkedModelless(ctx context.Context, in *middleware.Input, routes []ProviderRoute, reqPath, surface string) *middleware.Output {
@@ -275,14 +293,14 @@ func (m *Middleware) routeLinkedModelless(ctx context.Context, in *middleware.In
 	}
 	for _, route := range routes {
 		nativePath := linkedNativePath(route, reqPath)
-		if route.StripPathPrefix != "" && !isModelLessPath(nativePath) {
+		if !isLinkedModelLessPath(nativePath) {
 			continue
 		}
 		if !routeAuthorisesGroups(route, in.UserGroups) {
 			continue
 		}
 		var models []string
-		if isListingPath(nativePath) {
+		if isListingPath(nativePath) || nativePath == codexModelListingPath {
 			var bounded bool
 			models, bounded = discoverableModels(route, in.UserGroups)
 			if bounded && len(models) == 0 {
@@ -292,11 +310,50 @@ func (m *Middleware) routeLinkedModelless(ctx context.Context, in *middleware.In
 		out := m.allowLinkedCredential(ctx, in, route, surface)
 		if out.Decision == middleware.DecisionAllow {
 			markNonInference(out)
-			out.Mutations.RewriteUpstream.DiscoveryModels = models
+			rewrite := out.Mutations.RewriteUpstream
+			rewrite.DiscoveryModels = models
+			if len(models) > 0 {
+				// The filter reads JSON; preserve native capability fields while
+				// preventing client compression negotiation from bypassing it.
+				rewrite.StripHeaders = append(rewrite.StripHeaders, "Accept-Encoding")
+				rewrite.ExtraAuthHeaders = append(slices.Clone(rewrite.ExtraAuthHeaders), middleware.AuthHeader{Name: "Accept-Encoding", Value: "identity"})
+			}
 		}
 		return out
 	}
 	return denyNoAuthorisedRoute(surface, "")
+}
+
+func hasTransportUpgrade(headers []middleware.KV) bool {
+	for _, header := range headers {
+		if strings.EqualFold(header.Key, "Upgrade") && strings.TrimSpace(header.Value) != "" {
+			return true
+		}
+		if strings.EqualFold(header.Key, "Connection") {
+			for token := range strings.SplitSeq(header.Value, ",") {
+				if strings.EqualFold(strings.TrimSpace(token), "upgrade") {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func denySubscriptionUpgrade(surface string) *middleware.Output {
+	return &middleware.Output{
+		Decision:   middleware.DecisionDeny,
+		DenyStatus: http.StatusBadRequest,
+		DenyReason: &middleware.DenyReason{
+			Surface: surface,
+			Code:    denyCodeUnsupportedTransport,
+			Message: "subscription provider WebSocket upgrades are not supported; use HTTP streaming so model policies and usage limits can be enforced",
+		},
+		Metadata: []middleware.KV{
+			{Key: middleware.KeyLLMPolicyDecision, Value: "deny"},
+			{Key: middleware.KeyLLMPolicyReason, Value: "unsupported_transport"},
+		},
+	}
 }
 
 func (m *Middleware) allowLinkedCredential(ctx context.Context, in *middleware.Input, route ProviderRoute, surface string) *middleware.Output {

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -57,8 +58,14 @@ type DeviceCode struct {
 	Interval     time.Duration
 }
 
-// TokenSet is what the vendor's token endpoint returns. Optional refresh and
-// account fields preserve stored values when omitted; expiry rules are vendor-specific.
+// DeviceGrant is the approved authorization code and verifier returned by device polling.
+type DeviceGrant struct {
+	AuthorizationCode string
+	CodeVerifier      string
+}
+
+// TokenSet is what the vendor's token endpoint returns. Protocol validation
+// decides which fields are required; omitted account metadata stays unchanged.
 type TokenSet struct {
 	AccessToken  string
 	RefreshToken string
@@ -132,6 +139,15 @@ func (c *Client) RequestDeviceCode(ctx context.Context, prof *catalog.OAuthProfi
 // have, exchanges the resulting authorization code for tokens. It returns
 // ErrAuthorizationPending while the user has not approved yet.
 func (c *Client) PollDeviceCode(ctx context.Context, prof *catalog.OAuthProfile, code *DeviceCode) (*TokenSet, error) {
+	grant, err := c.PollDeviceGrant(ctx, prof, code)
+	if err != nil {
+		return nil, err
+	}
+	return c.exchangeCode(ctx, prof, grant.AuthorizationCode, grant.CodeVerifier)
+}
+
+// PollDeviceGrant reads the approved code without redeeming it, allowing an atomic claim first.
+func (c *Client) PollDeviceGrant(ctx context.Context, prof *catalog.OAuthProfile, code *DeviceCode) (*DeviceGrant, error) {
 	status, body, err := c.postJSON(ctx, prof.DeviceTokenURL, map[string]string{
 		"device_auth_id": code.DeviceAuthID,
 		"user_code":      code.UserCode,
@@ -155,16 +171,20 @@ func (c *Client) PollDeviceCode(ctx context.Context, prof *catalog.OAuthProfile,
 	if grant.AuthorizationCode == "" || grant.CodeVerifier == "" {
 		return nil, errors.New("decode device token response: missing authorization code")
 	}
-	return c.exchangeCode(ctx, prof, grant.AuthorizationCode, grant.CodeVerifier)
+	return &DeviceGrant{AuthorizationCode: grant.AuthorizationCode, CodeVerifier: grant.CodeVerifier}, nil
 }
 
 func (c *Client) exchangeCode(ctx context.Context, prof *catalog.OAuthProfile, code, verifier string) (*TokenSet, error) {
+	redirectURI := prof.DeviceRedirectURI
+	if prof.Flow == catalog.OAuthFlowAuthorizationCode {
+		redirectURI = prof.RedirectURI
+	}
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
 		"client_id":     {prof.ClientID},
 		"code":          {code},
 		"code_verifier": {verifier},
-		"redirect_uri":  {prof.DeviceRedirectURI},
+		"redirect_uri":  {redirectURI},
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, prof.TokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -206,16 +226,18 @@ func (c *Client) refreshOpenAI(ctx context.Context, prof *catalog.OAuthProfile, 
 		"refresh_token": refreshToken,
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: refresh outcome is unknown", ErrRelinkRequired)
 	}
 	if !isSuccess(status) {
 		code := refreshErrorCode(body)
-		if status == http.StatusUnauthorized || isPermanentRefreshError(code) {
-			return nil, fmt.Errorf("%w: vendor answered %d %s", ErrRelinkRequired, status, code)
-		}
-		return nil, fmt.Errorf("refresh token: vendor answered %d %s", status, code)
+		// No non-success response proves that this single-use grant was not consumed.
+		return nil, fmt.Errorf("%w: vendor answered %d %s", ErrRelinkRequired, status, code)
 	}
-	return decodeTokens(body)
+	tokens, err := decodeTokens(body)
+	if err != nil {
+		return nil, fmt.Errorf("%w: refresh returned an unusable token set", ErrRelinkRequired)
+	}
+	return tokens, nil
 }
 
 func isPermanentRefreshError(code string) bool {
@@ -274,11 +296,28 @@ func decodeTokens(body []byte) (*TokenSet, error) {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
 		IDToken      string `json:"id_token"`
+		TokenType    string `json:"token_type"`
+		ExpiresIn    *int64 `json:"expires_in"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("decode token response: %w", err)
+		return nil, errors.New("decode token response: malformed token set")
 	}
-	return &TokenSet{AccessToken: resp.AccessToken, RefreshToken: resp.RefreshToken, IDToken: resp.IDToken}, nil
+	if strings.TrimSpace(resp.AccessToken) == "" || strings.TrimSpace(resp.RefreshToken) == "" {
+		return nil, errors.New("decode token response: missing access or refresh token")
+	}
+	if resp.TokenType != "" && !strings.EqualFold(resp.TokenType, "bearer") {
+		return nil, errors.New("decode token response: unsupported token type")
+	}
+	tokens := &TokenSet{AccessToken: resp.AccessToken, RefreshToken: resp.RefreshToken, IDToken: resp.IDToken}
+	if resp.ExpiresIn != nil {
+		if *resp.ExpiresIn <= 0 || *resp.ExpiresIn > int64((365*24*time.Hour)/time.Second) {
+			return nil, errors.New("decode token response: invalid expiry")
+		}
+		tokens.ExpiresIn = time.Duration(*resp.ExpiresIn) * time.Second
+	} else if expiresAt, ok := AccessTokenExpiry(resp.AccessToken); !ok || !expiresAt.After(time.Now()) {
+		return nil, errors.New("decode token response: missing usable expiry")
+	}
+	return tokens, nil
 }
 
 func (c *Client) postJSON(ctx context.Context, endpoint string, payload any) (int, []byte, error) {
@@ -325,7 +364,7 @@ func parseInterval(raw json.RawMessage) time.Duration {
 		}
 		secs = v
 	}
-	if secs < 1 || secs > 60 {
+	if math.IsNaN(secs) || math.IsInf(secs, 0) || secs < 1 || secs > 60 {
 		return defaultPollInterval
 	}
 	return time.Duration(secs * float64(time.Second))
@@ -375,7 +414,7 @@ func AccessTokenExpiry(accessToken string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	exp, ok := claims["exp"].(float64)
-	if !ok || exp <= 0 {
+	if !ok || exp <= 0 || exp >= float64(math.MaxInt64) || math.Trunc(exp) != exp {
 		return time.Time{}, false
 	}
 	return time.Unix(int64(exp), 0).UTC(), true

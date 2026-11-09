@@ -273,7 +273,7 @@ func TestLinkedCredential_ConcurrentLookupsCollapse(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	assert.LessOrEqual(t, client.calls.Load(), int32(2), "concurrent requests should share one management lookup")
+	assert.Equal(t, int32(1), client.calls.Load(), "concurrent requests should share one management lookup")
 }
 
 // A model only a ChatGPT-login route serves, asked for on an API path, must

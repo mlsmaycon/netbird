@@ -118,12 +118,20 @@ func TestChatGPTCodexEntry(t *testing.T) {
 	assert.Equal(t, "openai", entry.ParserID, "Codex speaks the Responses API")
 	assert.Empty(t, entry.PricingSurfaces, "subscription usage must not be priced at API rates")
 	assert.Equal(t, OAuthFlowDevice, entry.OAuth.Flow)
+	assert.True(t, entry.OAuth.SupportsFlow(OAuthFlowAuthorizationCode), "browser sign-in is an optional fallback")
+	assert.Equal(t, "https://auth.openai.com/oauth/authorize", entry.OAuth.AuthorizeURL)
+	assert.Equal(t, "http://localhost:1455/auth/callback", entry.OAuth.RedirectURI, "the public client's registered loopback callback must stay pinned")
 	assert.Equal(t, "/backend-api/codex", entry.OAuth.RequestPathPrefix)
 
 	resp := entry.ToAPIResponse()
 	assert.Equal(t, api.AgentNetworkCatalogProviderCredentialKindUserOauth, resp.CredentialKind)
 	require.NotNil(t, resp.SubscriptionLogin)
 	assert.Equal(t, "https://auth.openai.com/codex/device", resp.SubscriptionLogin.VerificationUri)
+	require.NotNil(t, resp.SubscriptionLogin.SupportedFlows)
+	assert.Equal(t, []api.AgentNetworkCatalogSubscriptionLoginSupportedFlows{
+		api.AgentNetworkCatalogSubscriptionLoginSupportedFlowsDevice,
+		api.AgentNetworkCatalogSubscriptionLoginSupportedFlowsAuthorizationCode,
+	}, *resp.SubscriptionLogin.SupportedFlows, "clients should offer only advertised alternatives")
 
 	openai, _ := Lookup("openai_api")
 	openaiResp := openai.ToAPIResponse()

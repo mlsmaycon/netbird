@@ -24,23 +24,24 @@ import (
 const (
 	// refreshSkew is how close to expiry an access token is refreshed.
 	refreshSkew = 5 * time.Minute
-	// unreadableExpiryTTL is assumed for an access token whose exp cannot be
-	// read, matching the vendor client's own fallback.
-	unreadableExpiryTTL = 8 * 24 * time.Hour
 	// refreshLease is how long one replica holds the right to redeem a
 	// login's refresh token.
-	refreshLease = 30 * time.Second
+	refreshLease = 3 * httpTimeout
 	// leaseWaitStep is how often a replica waiting on another's refresh
 	// re-reads the row.
 	leaseWaitStep = 250 * time.Millisecond
-	// pollLease keeps two replicas from polling the same device code at once.
-	pollLease = 30 * time.Second
+	// deviceRedemptionTimeout allows a bounded claim, exchange and persistence
+	// before a missing outcome is treated as an abandoned redemption.
+	deviceRedemptionTimeout = 3 * httpTimeout
 	// flowResultTTL keeps a finished flow's outcome readable for late polls.
 	flowResultTTL = 5 * time.Minute
 	// defaultDeviceCodeTTL applies when a profile states none.
 	defaultDeviceCodeTTL = 15 * time.Minute
 
-	flowKeyPrefix = "agentnet:sublink:"
+	flowKeyPrefix          = "agentnet:sublink:"
+	devicePollSuffix       = ":poll"
+	deviceRedemptionSuffix = ":redeeming"
+	devicePermitSuffix     = ":device-permit"
 )
 
 var (
@@ -201,6 +202,11 @@ func (s *Service) StartLink(ctx context.Context, key Key, startedBy string, entr
 		NextPollAt:   now.Add(code.Interval),
 		Verification: prof.VerificationURI,
 	}
+	// This permit is written only when creating the flow. Losing cached
+	// results or redemption markers must never restore the right to exchange.
+	if err := s.cache.Set(ctx, flowKeyPrefix+id+devicePermitSuffix, "1", cachestore.WithExpiration(ttl)); err != nil {
+		return nil, fmt.Errorf("store device exchange permit: %w", err)
+	}
 	if err := s.saveFlow(ctx, id, state); err != nil {
 		return nil, err
 	}
@@ -216,6 +222,42 @@ func (s *Service) PollLink(ctx context.Context, key Key, userID, flowID string, 
 	if s.cache == nil {
 		return nil, errNoFlowCache
 	}
+	state, err := s.boundFlow(ctx, key, userID, flowID, entry)
+	if err != nil {
+		return nil, err
+	}
+	if flow, shouldPoll, err := s.devicePollState(ctx, flowID, state); !shouldPoll || err != nil {
+		return flow, err
+	}
+	interval := time.Duration(state.IntervalMS) * time.Millisecond
+	if interval <= 0 {
+		interval = defaultPollInterval
+	}
+	// This slot throttles request starts, rather than leasing a multi-request
+	// exchange. It expires naturally, so an old caller cannot release a newer slot.
+	acquired, err := s.cache.SetNX(ctx, flowKeyPrefix+flowID+devicePollSuffix, "1", interval)
+	if err != nil {
+		return nil, fmt.Errorf("claim link flow poll: %w", err)
+	}
+	if !acquired {
+		return state.view(flowID, FlowPending), nil
+	}
+	// Another poll may have completed or advanced the interval while this
+	// caller was waiting to acquire its slot.
+	state, err = s.boundFlow(ctx, key, userID, flowID, entry)
+	if err != nil {
+		return nil, err
+	}
+	if flow, shouldPoll, err := s.devicePollState(ctx, flowID, state); !shouldPoll || err != nil {
+		return flow, err
+	}
+	profile := *entry.OAuth
+	profile.Flow = state.view(flowID, FlowPending).Flow
+	entry.OAuth = &profile
+	return s.pollVendor(ctx, flowID, state, entry)
+}
+
+func (s *Service) boundFlow(ctx context.Context, key Key, userID, flowID string, entry catalog.Provider) (*flowState, error) {
 	state, err := s.loadFlow(ctx, flowID)
 	if err != nil {
 		return nil, err
@@ -223,59 +265,113 @@ func (s *Service) PollLink(ctx context.Context, key Key, userID, flowID string, 
 	if state.Key != key || state.StartedBy != userID || (state.ProviderType != "" && state.ProviderType != entry.ID) {
 		return nil, ErrFlowNotFound
 	}
-	if state.view(flowID, FlowPending).Flow != entry.OAuth.Flow {
+	if !entry.OAuth.SupportsFlow(state.view(flowID, FlowPending).Flow) {
 		return nil, ErrFlowNotFound
 	}
-	if result, ok := s.flowResult(ctx, flowID); ok {
-		return state.view(flowID, result), nil
+	return state, nil
+}
+
+// devicePollState reports whether another device grant poll is allowed.
+func (s *Service) devicePollState(ctx context.Context, flowID string, state *flowState) (*Flow, bool, error) {
+	result, ok, err := s.flowResult(ctx, flowID)
+	if err != nil {
+		return nil, false, err
+	}
+	if ok {
+		return state.view(flowID, result), false, nil
 	}
 	now := s.now()
 	if !now.Before(state.ExpiresAt) {
-		return state.view(flowID, FlowExpired), nil
+		return state.view(flowID, FlowExpired), false, nil
 	}
-	if state.Flow == catalog.OAuthFlowAuthorizationCode || now.Before(state.NextPollAt) {
-		return state.view(flowID, FlowPending), nil
+	if state.Flow == catalog.OAuthFlowAuthorizationCode {
+		return state.view(flowID, FlowPending), false, nil
 	}
-	acquired, err := s.cache.SetNX(ctx, flowKeyPrefix+flowID+":lease", "1", pollLease)
-	if err != nil {
-		return nil, fmt.Errorf("claim link flow poll: %w", err)
-	}
-	if !acquired {
-		return state.view(flowID, FlowPending), nil
-	}
-	defer func() {
-		if err := s.cache.Delete(ctx, flowKeyPrefix+flowID+":lease"); err != nil {
-			log.WithContext(ctx).Debugf("failed to release link flow poll lease: %v", err)
+	redemption, err := s.cache.Get(ctx, flowKeyPrefix+flowID+deviceRedemptionSuffix)
+	if err == nil {
+		deadline, err := time.Parse(time.RFC3339Nano, string(cacheBytes(redemption)))
+		if err != nil {
+			return nil, false, errors.New("invalid device redemption state")
 		}
-	}()
-
-	flow := state.view(flowID, s.pollVendor(ctx, flowID, state, entry))
-	flow.JustLinked = flow.Status == FlowLinked
-	return flow, nil
+		if !now.Before(deadline) {
+			return state.view(flowID, FlowFailed), false, nil
+		}
+		return state.view(flowID, FlowPending), false, nil
+	}
+	if !errors.Is(err, cachestore.NotFound{}) {
+		return nil, false, fmt.Errorf("read device redemption: %w", err)
+	}
+	if now.Before(state.NextPollAt) {
+		return state.view(flowID, FlowPending), false, nil
+	}
+	return nil, true, nil
 }
 
-func (s *Service) pollVendor(ctx context.Context, flowID string, state *flowState, entry catalog.Provider) FlowStatus {
+func (s *Service) pollVendor(ctx context.Context, flowID string, state *flowState, entry catalog.Provider) (*Flow, error) {
 	interval := time.Duration(state.IntervalMS) * time.Millisecond
-	tokens, err := s.client.PollDeviceCode(ctx, entry.OAuth, &DeviceCode{DeviceAuthID: state.DeviceAuthID, UserCode: state.UserCode, Interval: interval})
+	grant, err := s.client.PollDeviceGrant(ctx, entry.OAuth, &DeviceCode{DeviceAuthID: state.DeviceAuthID, UserCode: state.UserCode, Interval: interval})
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), httpTimeout)
+	defer cancel()
 	if errors.Is(err, ErrAuthorizationPending) {
 		state.NextPollAt = s.now().Add(interval)
-		if err := s.saveFlow(ctx, flowID, state); err != nil {
-			log.WithContext(ctx).Debugf("failed to record link flow poll time: %v", err)
+		if err := s.saveFlow(writeCtx, flowID, state); err != nil {
+			return nil, err
 		}
-		return FlowPending
+		return state.view(flowID, FlowPending), nil
 	}
 	if err != nil {
-		log.WithContext(ctx).Infof("agent network subscription link for provider %s failed: %v", state.Key.ProviderID, err)
-		s.setFlowResult(ctx, flowID, FlowFailed)
-		return FlowFailed
+		// No token exchange has started. Retrying a grant poll is safe, and
+		// its failure must not overwrite another poll's successful redemption.
+		return nil, fmt.Errorf("poll subscription approval: %w", err)
 	}
-	if err := s.storeLinked(ctx, state.Key, state.StartedBy, entry.OAuth, tokens); err != nil {
-		log.WithContext(ctx).Infof("agent network subscription link for provider %s could not be stored: %v", state.Key.ProviderID, err)
-		s.setFlowResult(ctx, flowID, FlowFailed)
-		return FlowFailed
+	if !s.now().Before(state.ExpiresAt) {
+		return state.view(flowID, FlowExpired), nil
 	}
-	s.setFlowResult(ctx, flowID, FlowLinked)
-	return FlowLinked
+	// Keep the in-flight outcome until the flow metadata expires. The separate
+	// single-use permit below guards redemption even if this marker is lost.
+	deadline := s.now().Add(deviceRedemptionTimeout)
+	claimed, err := s.cache.SetNX(writeCtx, flowKeyPrefix+flowID+deviceRedemptionSuffix, deadline.Format(time.RFC3339Nano), flowCacheTTL(state.ExpiresAt))
+	if err != nil {
+		return nil, fmt.Errorf("claim device redemption: %w", err)
+	}
+	if !claimed {
+		flow, shouldPoll, err := s.devicePollState(writeCtx, flowID, state)
+		if shouldPoll && err == nil {
+			return state.view(flowID, FlowFailed), nil
+		}
+		return flow, err
+	}
+	permit, found, err := s.cache.GetDel(writeCtx, flowKeyPrefix+flowID+devicePermitSuffix)
+	if err != nil {
+		return nil, fmt.Errorf("consume device exchange permit: %w", err)
+	}
+	if !found || permit != "1" {
+		// Another owner may still be finishing after its status marker was
+		// lost. Do not overwrite that owner's eventual successful outcome.
+		return state.view(flowID, FlowFailed), nil
+	}
+	return s.redeemDevice(ctx, flowID, state, entry, grant)
+}
+
+func (s *Service) redeemDevice(ctx context.Context, flowID string, state *flowState, entry catalog.Provider, grant *DeviceGrant) (*Flow, error) {
+	// Finish an accepted grant even if its dashboard request disconnects.
+	redeemCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), httpTimeout)
+	defer cancel()
+	tokens, exchangeErr := s.client.exchangeCode(redeemCtx, entry.OAuth, grant.AuthorizationCode, grant.CodeVerifier)
+	writeCtx, writeCancel := context.WithTimeout(context.WithoutCancel(ctx), httpTimeout)
+	defer writeCancel()
+	result := FlowFailed
+	if exchangeErr == nil {
+		if err := s.storeLinked(writeCtx, state.Key, state.StartedBy, entry.OAuth, tokens); err != nil {
+			log.WithContext(writeCtx).Infof("agent network subscription link for provider %s could not be stored: %v", state.Key.ProviderID, err)
+		} else {
+			result = FlowLinked
+		}
+	}
+	s.setFlowResult(writeCtx, flowID, result)
+	flow := state.view(flowID, result)
+	flow.JustLinked = result == FlowLinked
+	return flow, nil
 }
 
 func (s *Service) storeLinked(ctx context.Context, key Key, linkedBy string, prof *catalog.OAuthProfile, tokens *TokenSet) error {
@@ -412,7 +508,9 @@ func (s *Service) refresh(ctx context.Context, key Key, prof *catalog.OAuthProfi
 // lease on, and records the outcome.
 func (s *Service) redeem(ctx context.Context, key Key, prof *catalog.OAuthProfile, cred *types.ProviderCredential) (*types.ProviderCredential, error) {
 	held := cred.Version
-	tokens, err := s.client.Refresh(ctx, prof, cred.RefreshToken)
+	refreshCtx, refreshCancel := context.WithTimeout(context.WithoutCancel(ctx), httpTimeout)
+	defer refreshCancel()
+	tokens, err := s.client.Refresh(refreshCtx, prof, cred.RefreshToken)
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), httpTimeout)
 	defer cancel()
 	ctx = writeCtx
@@ -490,13 +588,6 @@ func applyRefresh(cred *types.ProviderCredential, prof *catalog.OAuthProfile, to
 	return nil
 }
 
-func accessExpiry(accessToken string, now time.Time) time.Time {
-	if exp, ok := AccessTokenExpiry(accessToken); ok {
-		return exp
-	}
-	return now.Add(unreadableExpiryTTL)
-}
-
 func accessHeaders(entry catalog.Provider, cred *types.ProviderCredential) []Header {
 	prof := entry.OAuth
 	headers := []Header{{
@@ -525,7 +616,7 @@ func (s *Service) saveFlow(ctx context.Context, id string, state *flowState) err
 	if err != nil {
 		return fmt.Errorf("encode link flow: %w", err)
 	}
-	ttl := time.Until(state.ExpiresAt) + flowResultTTL
+	ttl := flowCacheTTL(state.ExpiresAt)
 	if err := s.cache.Set(ctx, flowKeyPrefix+id, string(raw), cachestore.WithExpiration(ttl)); err != nil {
 		return fmt.Errorf("store link flow: %w", err)
 	}
@@ -550,18 +641,35 @@ func (s *Service) loadFlow(ctx context.Context, id string) (*flowState, error) {
 	return &state, nil
 }
 
-func (s *Service) flowResult(ctx context.Context, id string) (FlowStatus, bool) {
+func (s *Service) flowResult(ctx context.Context, id string) (FlowStatus, bool, error) {
 	raw, err := s.cache.Get(ctx, flowKeyPrefix+id+":result")
 	if err != nil {
-		return "", false
+		if errors.Is(err, cachestore.NotFound{}) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("read link flow result: %w", err)
 	}
-	return FlowStatus(cacheBytes(raw)), true
+	return FlowStatus(cacheBytes(raw)), true, nil
 }
 
 func (s *Service) setFlowResult(ctx context.Context, id string, result FlowStatus) {
-	if err := s.cache.Set(ctx, flowKeyPrefix+id+":result", string(result), cachestore.WithExpiration(flowResultTTL)); err != nil {
+	// Outcomes must outlive their flow metadata, or a late device poll could
+	// treat an already redeemed flow as pending after the outcome expires.
+	ttl := defaultDeviceCodeTTL + flowResultTTL
+	if state, err := s.loadFlow(ctx, id); err == nil {
+		ttl = flowCacheTTL(state.ExpiresAt)
+	}
+	if err := s.cache.Set(ctx, flowKeyPrefix+id+":result", string(result), cachestore.WithExpiration(ttl)); err != nil {
 		log.WithContext(ctx).Debugf("failed to record link flow result: %v", err)
 	}
+}
+
+func flowCacheTTL(expiresAt time.Time) time.Duration {
+	ttl := time.Until(expiresAt) + flowResultTTL
+	if ttl < flowResultTTL {
+		return flowResultTTL
+	}
+	return ttl
 }
 
 func cacheBytes(v any) []byte {

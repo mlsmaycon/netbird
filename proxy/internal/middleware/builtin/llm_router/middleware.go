@@ -182,9 +182,9 @@ func (m *Middleware) Invoke(ctx context.Context, in *middleware.Input) (*middlew
 	if routes := m.linkedRoutesFor(reqPath); len(routes) > 0 {
 		return m.routeLinkedCredential(ctx, in, routes, reqPath, surface, model), nil
 	}
-	// Reserve the login namespace even when no policy publishes its route.
-	// Otherwise an unlinked request could silently use an Anthropic API key.
-	if pathPrefixMatches(claudeLoginPathPrefix, reqPath) {
+	// Reserve login namespaces even when no policy publishes their routes.
+	// Otherwise an unlinked request could silently use an API key.
+	if pathPrefixMatches(claudeLoginPathPrefix, reqPath) || pathPrefixMatches(codexLoginPathPrefix, reqPath) {
 		return denyCredential(surface, credentialNotLinked), nil
 	}
 

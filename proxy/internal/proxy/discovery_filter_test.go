@@ -67,6 +67,30 @@ func TestModelDiscoveryFilter_KeepsOnlyAuthorisedModels(t *testing.T) {
 		"only the models the route authorises may reach the picker")
 }
 
+func TestModelDiscoveryFilter_CodexModelCapabilities(t *testing.T) {
+	resp := jsonListingResponse(`{"models":[{"slug":"gpt-5.5","display_name":"GPT-5.5","supported_reasoning_levels":[{"effort":"high"}],"context_window":272000},{"slug":"gpt-5.4","display_name":"GPT-5.4"}],"client_version":"0.154.0"}`) //nolint:bodyclose // in-memory body, replaced by the filter
+	require.NoError(t, modelDiscoveryFilter([]string{"gpt-5.5"}, nil)(resp))                                                                                                                                                                //nolint:bodyclose // in-memory body, replaced by the filter
+	raw, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	var doc struct {
+		Models []struct {
+			Slug                     string `json:"slug"`
+			ContextWindow            int    `json:"context_window"`
+			SupportedReasoningLevels []struct {
+				Effort string `json:"effort"`
+			} `json:"supported_reasoning_levels"`
+		} `json:"models"`
+		ClientVersion string `json:"client_version"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &doc))
+	require.Len(t, doc.Models, 1, "native Codex lists must expose only policy-permitted slugs")
+	assert.Equal(t, "gpt-5.5", doc.Models[0].Slug, "the permitted model must remain available")
+	assert.Equal(t, 272000, doc.Models[0].ContextWindow, "model capability fields must survive filtering")
+	require.Len(t, doc.Models[0].SupportedReasoningLevels, 1, "reasoning capabilities must survive filtering")
+	assert.Equal(t, "high", doc.Models[0].SupportedReasoningLevels[0].Effort, "capability values must remain unchanged")
+	assert.Equal(t, "0.154.0", doc.ClientVersion, "native envelope fields must survive filtering")
+}
+
 // TestModelDiscoveryFilter_MatchesDatedAndPrefixedIDs pins the two id forms
 // a gateway returns for a model the operator registered plainly.
 func TestModelDiscoveryFilter_MatchesDatedAndPrefixedIDs(t *testing.T) {
@@ -267,6 +291,6 @@ func TestFilterBedrockInferenceProfiles(t *testing.T) {
 // the filter cannot parse must reach the client exactly as the upstream sent
 // it, rather than being rewritten into something shorter and wrong.
 func TestFilterLeavesUnknownEnvelopesAlone(t *testing.T) {
-	_, ok := filterListingBody([]byte(`{"models":[{"name":"something"}]}`), map[string]struct{}{})
+	_, ok := filterListingBody([]byte(`{"items":[{"name":"something"}]}`), map[string]struct{}{})
 	assert.False(t, ok)
 }
